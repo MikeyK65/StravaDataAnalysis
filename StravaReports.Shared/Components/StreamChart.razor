@@ -1,0 +1,40 @@
+@* One stream (HR, power, pace...) plotted against distance or elapsed time. *@
+@if (Points.Count > 0)
+{
+    <div class="stream-chart">
+        <div class="stream-head"><strong>@Title</strong><span class="muted small">@Summary</span></div>
+        <ApexChart @key="@Key" TItem="SeriesPoint" Options="_options" Height="Height" XAxisType="XAxisType.Numeric">
+            <ApexPointSeries TItem="SeriesPoint" Items="Points.Where(p => p.Y is not null)" Name="@Title" SeriesType="@(Area ? SeriesType.Area : SeriesType.Line)"
+                             XValue="@(p => (decimal)Math.Round(XValue(p.X), 2))" YValue="@(p => (decimal?)Math.Round(YValue(p.Y!.Value), 2))" />
+        </ApexChart>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter, EditorRequired] public IReadOnlyList<SeriesPoint> Points { get; set; } = [];
+    [Parameter] public Func<double, double> YValue { get; set; } = v => v;
+    [Parameter] public Func<double, double> XValue { get; set; } = v => v;
+    [Parameter] public string XTitle { get; set; } = "";
+    [Parameter] public string? YTitle { get; set; }
+    [Parameter] public string Color { get; set; } = UiTheme.Accent;
+    [Parameter] public bool Area { get; set; }
+    [Parameter] public bool Reversed { get; set; }
+    [Parameter] public bool Dark { get; set; }
+    [Parameter] public string? Summary { get; set; }
+    [Parameter] public int Height { get; set; } = 180;
+    [Parameter] public string Key { get; set; } = "";
+
+    private ApexChartOptions<SeriesPoint> _options = new();
+
+    protected override void OnParametersSet()
+    {
+        _options = UiTheme.ChartOptions<SeriesPoint>(Dark, YTitle);
+        _options.Colors = [Color];
+        _options.Legend = new Legend { Show = false };
+        _options.Stroke = new Stroke { Width = 1.5, Curve = Curve.Straight };
+        _options.Xaxis = new XAxis { Title = new AxisTitle { Text = XTitle }, TickAmount = 10, DecimalsInFloat = 1 };
+        if (_options.Yaxis is { Count: > 0 } y) y[0].Reversed = Reversed;
+        if (Area) _options.Fill = new Fill { Type = new List<FillType> { FillType.Gradient } };
+    }
+}

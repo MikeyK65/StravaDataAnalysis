@@ -1,0 +1,456 @@
+@page "/settings"
+@implements IDisposable
+@inject AppSettingsService SettingsService
+@inject StravaAuthService Auth
+@inject IAuthLauncher Launcher
+@inject IStravaClient Client
+@inject IHostInfo Host
+@inject DataManagementService Data
+@inject SyncEngine Sync
+@inject FilterState FilterState
+@inject StravaWebhookService Webhooks
+@inject NavigationManager Nav
+
+<PageTitle>Settings · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Settings</h1>
+        <p class="muted">Credentials are entered here once and kept in secure storage, never in source or config files.</p>
+    </div>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert @(_messageOk ? "ok" : "danger")">@_message</div>
+}
+
+<div class="card">
+    <div class="card-head">
+        <h2>Strava connection</h2>
+        @if (_conn is { Connected: true })
+        {
+            <span class="badge ok">Connected</span>
+        }
+        else
+        {
+            <span class="badge">Not connected</span>
+        }
+    </div>
+
+    @if (_conn is { Connected: true } c)
+    {
+        <dl class="stat-rows" style="max-width:460px; margin-bottom:1rem">
+            <dt>Athlete</dt><dd>@(c.AthleteName ?? "–")</dd>
+            <dt>Token expires</dt><dd>@(c.TokenExpiresUtc?.ToLocalTime().ToString("d MMM yyyy HH:mm") ?? "–")</dd>
+            <dt>Granted scope</dt><dd>@(c.Scope ?? "–")</dd>
+        </dl>
+    }
+
+    <div class="form-grid">
+        <div class="field">
+            <label for="s-client-id">Client ID</label>
+            <input id="s-client-id" type="text" inputmode="numeric" autocomplete="off" @bind="_model.ClientIdText" />
+            <span class="hint">From strava.com/settings/api.</span>
+        </div>
+        <div class="field">
+            <label for="s-secret">Client Secret</label>
+            <input id="s-secret" type="password" autocomplete="new-password"
+                   placeholder="@(_conn?.HasClientSecret == true ? "•••••••• saved; type to replace" : "Not set")" @bind="_newSecret" />
+            <span class="hint">Write-only: a saved secret is never shown again, only replaced.</span>
+        </div>
+        <div class="field wide">
+            <span class="label">Authorization callback domain</span>
+            <span class="hint">@Launcher.RedirectHint</span>
+        </div>
+        @if (!Host.HasScheduledSync)
+        {
+            <div class="field wide">
+                <label for="s-relay">OAuth relay (web app URL, optional)</label>
+                <input id="s-relay" type="url" placeholder="https://your-strava-reports.azurewebsites.net" @bind="_model.MobileRelayBaseUrl" />
+                <span class="hint">On iOS, Strava redirects to your web app's /auth/strava/app-callback, which forwards to this app. Leave empty on desktop to use a localhost callback.</span>
+            </div>
+        }
+        <div class="field wide">
+            <span class="label">Requested scopes</span>
+            <div class="btn-row">
+                <label class="check"><input type="checkbox" checked disabled /> read</label>
+                <label class="check"><input type="checkbox" @bind="_model.ScopeActivityReadAll" /> activity:read_all (include private activities)</label>
+                <label class="check"><input type="checkbox" @bind="_model.ScopeProfileReadAll" /> profile:read_all</label>
+            </div>
+        </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:1rem">
+        <button class="btn" @onclick="SaveCredentials" disabled="@_busy">Save credentials</button>
+        @if (_conn is { Connected: true })
+        {
+            <button class="btn" @onclick="TestConnection" disabled="@_busy">Test connection</button>
+            <button class="btn btn-danger" @onclick="Disconnect" disabled="@_busy">Disconnect</button>
+        }
+        else
+        {
+            <button class="btn btn-primary" @onclick="Connect" disabled="@_busy">Connect to Strava</button>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <h2>Sync</h2>
+    <div class="form-grid">
+        <label class="check"><input type="checkbox" @bind="_model.AutoSync" /> @(Host.HasScheduledSync ? "Sync automatically on a schedule" : "Sync automatically when the app opens")</label>
+        @if (Host.HasScheduledSync)
+        {
+            <div class="field">
+                <label for="s-interval">Interval (minutes)</label>
+                <input id="s-interval" type="number" min="15" max="1440" @bind="_model.SyncIntervalMinutes" />
+            </div>
+        }
+        <label class="check"><input type="checkbox" @bind="_model.FetchDetail" /> Fetch activity detail (laps, best efforts, gear)</label>
+        <label class="check"><input type="checkbox" @bind="_model.FetchStreams" /> Fetch streams (HR, power, cadence, altitude; uses many API calls)</label>
+        <div class="field wide">
+            <label for="s-api">API base URL</label>
+            <input id="s-api" type="url" @bind="_model.ApiBaseUrl" />
+            <span class="hint">Default @StravaDefaults.ApiBaseUrl. Strava's new base URL https://api-v3.strava.com is available from 4 January 2027.</span>
+        </div>
+    </div>
+</div>
+
+@if (Host.SupportsWebhooks)
+{
+    <div class="card">
+        <h2>Strava webhooks</h2>
+        <p class="small">With webhooks Strava tells this server about new, edited and deleted activities within seconds, so it only polls every @SyncSchedule.WebhookSafetyInterval.TotalHours hours as a safety net. Each event is confirmed with the API before anything changes.</p>
+        @if (_hooks is { } h)
+        {
+            <dl class="stat-rows" style="max-width:560px">
+                <dt>Status</dt><dd>@(h.Subscribed ? $"Subscribed (#{h.SubscriptionId})" : "Not subscribed")</dd>
+                <dt>Callback URL</dt><dd style="word-break:break-all">@(h.CallbackUrl ?? CallbackUrl)</dd>
+                <dt>Last event</dt><dd>@(h.LastEventUtc?.ToLocalTime().ToString("d MMM yyyy HH:mm") ?? "none")</dd>
+                <dt>Events, last 7 days</dt><dd>@h.EventsLast7Days</dd>
+                <dt>Waiting to apply</dt><dd>@h.PendingEvents</dd>
+            </dl>
+            <div class="btn-row" style="margin-top:.75rem">
+                @if (h.Subscribed)
+                {
+                    <button class="btn btn-danger" disabled="@_busy" @onclick="Unsubscribe">Unsubscribe</button>
+                }
+                else
+                {
+                    <button class="btn" disabled="@(_busy || !CallbackIsPublic)" @onclick="Subscribe">Subscribe</button>
+                }
+            </div>
+            @if (!h.Subscribed && !CallbackIsPublic)
+            {
+                <p class="hint small" style="margin-top:.5rem">Strava must reach the callback over HTTPS from the internet, so this works once the app is deployed (not on localhost).</p>
+            }
+        }
+    </div>
+}
+
+<div class="card">
+    <h2>Display and reports</h2>
+    <div class="form-grid">
+        <div class="field">
+            <label for="s-units">Units</label>
+            <select id="s-units" @bind="_model.Units">
+                <option value="@UnitSystem.Metric">Metric (km, m)</option>
+                <option value="@UnitSystem.Imperial">Imperial (mi, ft)</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="s-week">Week starts on</label>
+            <select id="s-week" @bind="_model.WeekStart">
+                <option value="@DayOfWeek.Monday">Monday</option>
+                <option value="@DayOfWeek.Sunday">Sunday</option>
+            </select>
+        </div>
+        <label class="check"><input type="checkbox" @bind="_model.IncludeTrainerByDefault" /> Include trainer and virtual activities by default</label>
+        <label class="check"><input type="checkbox" @bind="_model.IncludeCommuteByDefault" /> Include commutes by default</label>
+        <label class="check wide"><input type="checkbox" @bind="_model.MapTiles" /> Show map tiles under routes</label>
+        <div class="field wide">
+            <label for="s-tiles">Map tile URL</label>
+            <input id="s-tiles" type="url" @bind="_model.MapTileUrl" />
+            <span class="hint">Routes always draw offline. With tiles on, your browser or device fetches map images for the area shown from this server, which therefore learns roughly where you were. Default is OpenStreetMap; heavy use is not allowed by its tile policy.</span>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Athlete</h2>
+    <div class="form-grid">
+        <div class="field"><label for="s-maxhr">Max heart rate (bpm)</label><input id="s-maxhr" type="number" @bind="_model.MaxHr" /></div>
+        <div class="field"><label for="s-resthr">Resting heart rate (bpm)</label><input id="s-resthr" type="number" @bind="_model.RestingHr" /></div>
+        <div class="field"><label for="s-ftp">FTP (W)</label><input id="s-ftp" type="number" @bind="_model.Ftp" /></div>
+        <div class="field">
+            <label for="s-zones">Heart-rate zones</label>
+            <input id="s-zones" type="text" placeholder="e.g. 130,145,160,175" @bind="_model.HrZones" />
+            <span class="hint">Upper bpm of zones 1–4; zone 5 is above.</span>
+        </div>
+        <div class="field"><label for="s-shoe">Shoe retirement distance (km)</label><input id="s-shoe" type="number" min="100" @bind="_model.ShoeRetirementKm" /></div>
+    </div>
+</div>
+
+<div class="btn-row" style="margin:1rem 0">
+    <button class="btn btn-primary" @onclick="SaveSettings" disabled="@_busy">Save settings</button>
+</div>
+
+<div class="card">
+    <h2>Data</h2>
+    <p class="small">Delete every activity, gear item, sync state and log entry stored @(Host.HasScheduledSync ? "on this server" : "on this device"). Your settings and Strava connection are kept, so the next sync starts a fresh backfill.</p>
+    @if (_confirmDelete)
+    {
+        <div class="field" style="max-width:320px">
+            <label for="s-confirm">Type DELETE to confirm</label>
+            <input id="s-confirm" type="text" @bind="_deleteText" @bind:event="oninput" />
+        </div>
+        <div class="btn-row" style="margin-top:.75rem">
+            <button class="btn btn-danger" disabled="@(_deleteText != "DELETE" || _busy)" @onclick="DeleteAll">Delete all data</button>
+            <button class="btn" @onclick="CancelDelete">Cancel</button>
+        </div>
+    }
+    else
+    {
+        <button class="btn btn-danger" @onclick="() => _confirmDelete = true">Delete all data…</button>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "connected")] public string? ConnectedFlag { get; set; }
+    [SupplyParameterFromQuery(Name = "error")] public string? ErrorText { get; set; }
+
+    private EditModel _model = new();
+    private ConnectionInfo? _conn;
+    private string? _newSecret;
+    private string? _message;
+    private bool _messageOk;
+    private bool _busy;
+    private bool _confirmDelete;
+    private string _deleteText = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _model = EditModel.From(await SettingsService.GetAsync());
+        await RefreshConnection();
+        Auth.ConnectionChanged += OnConnectionChanged;
+        if (ConnectedFlag == "1") Show("Connected to Strava. The first sync has started.", true);
+        else if (!string.IsNullOrEmpty(ErrorText)) Show($"Connection failed: {ErrorText}", false);
+    }
+
+    private void OnConnectionChanged() => InvokeAsync(async () => { await RefreshConnection(); StateHasChanged(); });
+
+    private async Task RefreshConnection()
+    {
+        _conn = await Auth.GetConnectionAsync();
+        if (Host.SupportsWebhooks) _hooks = await Webhooks.GetStatusAsync();
+    }
+
+    private WebhookStatus? _hooks;
+
+    private string CallbackUrl => Nav.ToAbsoluteUri("webhooks/strava").ToString();
+
+    private bool CallbackIsPublic => Uri.TryCreate(CallbackUrl, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps && !u.IsLoopback;
+
+    private async Task Subscribe()
+    {
+        await Run(async () =>
+        {
+            var id = await Webhooks.SubscribeAsync(CallbackUrl);
+            await RefreshConnection();
+            Show($"Subscribed to Strava webhooks (#{id}).", true);
+        });
+    }
+
+    private async Task Unsubscribe()
+    {
+        await Run(async () =>
+        {
+            await Webhooks.UnsubscribeAsync();
+            await RefreshConnection();
+            Show("Webhook subscription removed; scheduled polling continues.", true);
+        });
+    }
+
+    private void Show(string message, bool ok) { _message = message; _messageOk = ok; }
+
+    private async Task<bool> PersistCredentialsAsync()
+    {
+        var current = await SettingsService.GetAsync();
+        await SettingsService.SaveAsync(_model.ApplyTo(current));
+        if (!string.IsNullOrWhiteSpace(_newSecret))
+        {
+            await Auth.SetClientSecretAsync(_newSecret);
+            _newSecret = null;
+        }
+        await RefreshConnection();
+        return _conn is { HasClientId: true, HasClientSecret: true };
+    }
+
+    private async Task SaveCredentials()
+    {
+        await Run(async () =>
+        {
+            var ok = await PersistCredentialsAsync();
+            Show(ok ? "Credentials saved." : "Saved. Both a Client ID and a Client Secret are needed to connect.", ok);
+        });
+    }
+
+    private async Task Connect()
+    {
+        await Run(async () =>
+        {
+            if (!await PersistCredentialsAsync())
+            {
+                Show("Enter your Client ID and Client Secret first.", false);
+                return;
+            }
+            var result = await Launcher.ConnectAsync();
+            if (result.Completed)
+            {
+                await RefreshConnection();
+                Show("Connected to Strava. The first sync has started.", true);
+                Sync.StartInBackground(SyncTrigger.Manual);
+            }
+            else if (result.Error is not null)
+            {
+                Show(result.Error, false);
+            }
+        });
+    }
+
+    private async Task TestConnection()
+    {
+        await Run(async () =>
+        {
+            var token = await Auth.GetAccessTokenAsync();
+            var (athlete, _) = await Client.GetAthleteAsync(token);
+            Show($"Connection OK: {athlete.Firstname} {athlete.Lastname} (athlete {athlete.Id}).", true);
+        });
+    }
+
+    private async Task Disconnect()
+    {
+        await Run(async () =>
+        {
+            Sync.Cancel();
+            await Auth.DisconnectAsync();
+            await RefreshConnection();
+            Show("Disconnected. Strava access was revoked and tokens wiped. Your local data is kept.", true);
+        });
+    }
+
+    private async Task SaveSettings()
+    {
+        await Run(async () =>
+        {
+            await PersistCredentialsAsync();
+            var s = await SettingsService.GetAsync();
+            // Reset the session filter so the new trainer/commute defaults apply.
+            FilterState.Set(FilterState.Get(s) with { IncludeTrainer = s.IncludeTrainerByDefault, IncludeCommute = s.IncludeCommuteByDefault });
+            Show("Settings saved.", true);
+        });
+    }
+
+    private void CancelDelete() { _confirmDelete = false; _deleteText = ""; }
+
+    private async Task DeleteAll()
+    {
+        await Run(async () =>
+        {
+            Sync.Cancel();
+            await Data.DeleteAllDataAsync(includeSettings: false);
+            _confirmDelete = false;
+            _deleteText = "";
+            Show("All local data deleted.", true);
+        });
+    }
+
+    private async Task Run(Func<Task> action)
+    {
+        _busy = true;
+        _message = null;
+        try { await action(); }
+        catch (Exception ex) { Show(ex.Message, false); }
+        finally { _busy = false; }
+    }
+
+    public void Dispose() => Auth.ConnectionChanged -= OnConnectionChanged;
+
+    /// <summary>Mutable mirror of the settings record for two-way binding.</summary>
+    private class EditModel
+    {
+        public string? ClientIdText { get; set; }
+        public string ApiBaseUrl { get; set; } = StravaDefaults.ApiBaseUrl;
+        public string? MobileRelayBaseUrl { get; set; }
+        public bool ScopeActivityReadAll { get; set; }
+        public bool ScopeProfileReadAll { get; set; }
+        public bool AutoSync { get; set; }
+        public int SyncIntervalMinutes { get; set; }
+        public bool FetchDetail { get; set; }
+        public bool FetchStreams { get; set; }
+        public UnitSystem Units { get; set; }
+        public DayOfWeek WeekStart { get; set; }
+        public int? MaxHr { get; set; }
+        public int? RestingHr { get; set; }
+        public int? Ftp { get; set; }
+        public string? HrZones { get; set; }
+        public double ShoeRetirementKm { get; set; }
+        public bool IncludeTrainerByDefault { get; set; }
+        public bool IncludeCommuteByDefault { get; set; }
+        public bool MapTiles { get; set; }
+        public string MapTileUrl { get; set; } = StravaDefaults.MapTileUrl;
+
+        public static EditModel From(AppSettingsModel s) => new()
+        {
+            ClientIdText = s.ClientId,
+            ApiBaseUrl = s.ApiBaseUrl,
+            MobileRelayBaseUrl = s.MobileRelayBaseUrl,
+            ScopeActivityReadAll = s.ScopeActivityReadAll,
+            ScopeProfileReadAll = s.ScopeProfileReadAll,
+            AutoSync = s.AutoSync,
+            SyncIntervalMinutes = s.SyncIntervalMinutes,
+            FetchDetail = s.FetchDetail,
+            FetchStreams = s.FetchStreams,
+            Units = s.Units,
+            WeekStart = s.WeekStart,
+            MaxHr = s.MaxHr,
+            RestingHr = s.RestingHr,
+            Ftp = s.Ftp,
+            HrZones = s.HrZones,
+            ShoeRetirementKm = s.ShoeRetirementKm,
+            IncludeTrainerByDefault = s.IncludeTrainerByDefault,
+            IncludeCommuteByDefault = s.IncludeCommuteByDefault,
+            MapTiles = s.MapTiles,
+            MapTileUrl = s.MapTileUrl,
+        };
+
+        public AppSettingsModel ApplyTo(AppSettingsModel s) => s with
+        {
+            ClientId = ClientIdText?.Trim(),
+            ApiBaseUrl = string.IsNullOrWhiteSpace(ApiBaseUrl) ? StravaDefaults.ApiBaseUrl : ApiBaseUrl.Trim(),
+            MobileRelayBaseUrl = string.IsNullOrWhiteSpace(MobileRelayBaseUrl) ? null : MobileRelayBaseUrl.Trim().TrimEnd('/'),
+            ScopeActivityReadAll = ScopeActivityReadAll,
+            ScopeProfileReadAll = ScopeProfileReadAll,
+            AutoSync = AutoSync,
+            SyncIntervalMinutes = Math.Clamp(SyncIntervalMinutes, 15, 1440),
+            FetchDetail = FetchDetail,
+            FetchStreams = FetchStreams,
+            Units = Units,
+            WeekStart = WeekStart,
+            MaxHr = MaxHr,
+            RestingHr = RestingHr,
+            Ftp = Ftp,
+            HrZones = HrZones,
+            ShoeRetirementKm = Math.Max(100, ShoeRetirementKm),
+            IncludeTrainerByDefault = IncludeTrainerByDefault,
+            IncludeCommuteByDefault = IncludeCommuteByDefault,
+            MapTiles = MapTiles,
+            MapTileUrl = ValidTileUrl(MapTileUrl),
+        };
+
+        /// <summary>Only an https template with {z}/{x}/{y} placeholders; anything else falls back to the default.</summary>
+        private static string ValidTileUrl(string? url) =>
+            url is not null && Uri.TryCreate(url.Replace("{", "").Replace("}", ""), UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps
+                && url.Contains("{z}") && url.Contains("{x}") && url.Contains("{y}") ? url.Trim() : StravaDefaults.MapTileUrl;
+    }
+}

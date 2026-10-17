@@ -1,0 +1,31 @@
+@page "/about"
+@inject IHostInfo Host
+
+<PageTitle>About · Strava Reports</PageTitle>
+
+<div class="page-head"><div><h1>About</h1></div></div>
+
+<div class="card">
+    <h2>Strava Reports</h2>
+    <p>A personal, local-first reporting app. Your Strava activities are copied into your own database on this @(Host.PlatformName == "Web" ? "server" : "device"), and every report runs from that copy, offline.</p>
+    <dl class="stat-rows" style="max-width:360px">
+        <dt>Platform</dt><dd>@Host.PlatformName</dd>
+        <dt>Version</dt><dd>@(typeof(About).Assembly.GetName().Version?.ToString(3))</dd>
+    </dl>
+</div>
+
+<div class="card">
+    <h2>Powered by Strava</h2>
+    <p>Activity data comes from the <a href="https://developers.strava.com" target="_blank" rel="noopener">Strava API</a>.
+        This app is not developed or endorsed by Strava. Each activity page links back to the original on Strava.</p>
+    <p class="muted small">Check Strava's current brand guidelines for the exact attribution artwork before distributing the app.</p>
+</div>
+
+<div class="card">
+    <h2>Privacy</h2>
+    <ul class="small" style="padding-left:1.2rem; margin:0">
+        <li>Data stays in your own database. There is no third-party analytics.</li>
+        <li>No Strava data is sent to any AI or LLM service; reports are computed with ordinary code, as Strava's API policy requires.</li>
+        <li>Credentials are kept in secure storage (Keychain on iOS, Data Protection on the web server), never in source or config files.</li>
+    </ul>
+</div>

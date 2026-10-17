@@ -1,0 +1,41 @@
+@inject ReportCatalogue Catalogue
+@inject IHostInfo Host
+
+<nav class="nav">
+    <NavLink class="nav-link" href="" Match="NavLinkMatch.All" @onclick="OnNavigate">
+        <span class="nav-icon">◧</span> Dashboard
+    </NavLink>
+    <NavLink class="nav-link" href="activities" @onclick="OnNavigate">
+        <span class="nav-icon">≡</span> Activities
+    </NavLink>
+
+    @foreach (var section in Catalogue.Entries.GroupBy(e => e.Report.Section))
+    {
+        <div class="nav-section">@section.Key</div>
+        @foreach (var entry in section)
+        {
+            <NavLink class="nav-link" href="@($"reports/{entry.Report.Id}")" @onclick="OnNavigate">
+                <span class="nav-icon">▤</span> @entry.Report.Title
+            </NavLink>
+        }
+    }
+
+    <div class="nav-section">Data</div>
+    <NavLink class="nav-link" href="export" @onclick="OnNavigate"><span class="nav-icon">⇩</span> Export CSV</NavLink>
+    <NavLink class="nav-link" href="archive" @onclick="OnNavigate"><span class="nav-icon">▦</span> Export archive</NavLink>
+    <NavLink class="nav-link" href="backup" @onclick="OnNavigate"><span class="nav-icon">⛁</span> Backup &amp; restore</NavLink>
+
+    <div class="nav-section">App</div>
+    <NavLink class="nav-link" href="sync" @onclick="OnNavigate"><span class="nav-icon">⟳</span> Sync</NavLink>
+    <NavLink class="nav-link" href="settings" @onclick="OnNavigate"><span class="nav-icon">⚙</span> Settings</NavLink>
+    <NavLink class="nav-link" href="logs" @onclick="OnNavigate"><span class="nav-icon">☰</span> Logs</NavLink>
+    <NavLink class="nav-link" href="about" @onclick="OnNavigate"><span class="nav-icon">ⓘ</span> About</NavLink>
+    @if (Host.SignOutPath is { } signOut)
+    {
+        <a class="nav-link" href="@signOut" data-enhance-nav="false"><span class="nav-icon">⎋</span> Sign out</a>
+    }
+</nav>
+
+@code {
+    [Parameter] public EventCallback OnNavigate { get; set; }
+}

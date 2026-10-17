@@ -1,0 +1,102 @@
+@inherits ReportViewBase
+@inject TrainingLoadReport Report
+
+<FilterBar />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Latest: { } latest } r)
+{
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Fitness (CTL)</div><div class="value">@latest.Fitness.ToString("0")</div><div class="sub">42-day weighted load</div></div>
+        <div class="card stat"><div class="label">Fatigue (ATL)</div><div class="value">@latest.Fatigue.ToString("0")</div><div class="sub">7-day weighted load</div></div>
+        <div class="card stat"><div class="label">Form (TSB)</div><div class="value">@latest.Form.ToString("+0;−0;0")</div><div class="sub">@FormLabel(latest.Form)</div></div>
+        <div class="card stat"><div class="label">Ramp rate</div><div class="value">@(r.RampRate is { } ramp ? ramp.ToString("+0.0;−0.0;0") : "–")</div><div class="sub">fitness change over 7 days</div></div>
+    </div>
+
+    <div class="card">
+        <h2>Fitness, fatigue and form</h2>
+        <ApexChart @key="@($"f{Version}")" TItem="LoadDay" Options="_ff" Height="320" XAxisType="XAxisType.Datetime">
+            <ApexPointSeries TItem="LoadDay" Items="r.Days" Name="Fitness" SeriesType="SeriesType.Line" XValue="@(d => d.Day.ToDateTime(TimeOnly.MinValue))" YValue="@(d => (decimal)Math.Round(d.Fitness, 1))" />
+            <ApexPointSeries TItem="LoadDay" Items="r.Days" Name="Fatigue" SeriesType="SeriesType.Line" XValue="@(d => d.Day.ToDateTime(TimeOnly.MinValue))" YValue="@(d => (decimal)Math.Round(d.Fatigue, 1))" />
+            <ApexPointSeries TItem="LoadDay" Items="r.Days" Name="Form" SeriesType="SeriesType.Area" XValue="@(d => d.Day.ToDateTime(TimeOnly.MinValue))" YValue="@(d => (decimal)Math.Round(d.Form, 1))" />
+        </ApexChart>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Weekly load</h2>
+            <ApexChart @key="@($"w{Version}")" TItem="PeriodValue" Options="_weekly" Height="260">
+                <ApexPointSeries TItem="PeriodValue" Items="r.WeeklyLoad" Name="Load" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Period.ToString("d MMM yy"))" YValue="@(w => (decimal)Math.Round(w.Value, 0))" />
+            </ApexChart>
+        </div>
+        <div class="card">
+            <h2>How load is calculated</h2>
+            <dl class="stat-rows">
+                @foreach (var (method, label) in MethodLabels)
+                {
+                    <dt>@label</dt><dd>@r.Methods.GetValueOrDefault(method)</dd>
+                }
+            </dl>
+            <p class="muted small" style="margin-top:.75rem">
+                Each activity uses the first method that has data: power TSS (needs FTP@(Settings.Ftp is { } f ? $", {f} W" : ", not set")),
+                heart-rate TRIMP (max HR @(r.MaxHrUsed?.ToString() ?? "unknown"), resting @(Settings.RestingHr ?? Metrics.DefaultRestingHr)),
+                Strava's Relative Effort, or 30 per hour of moving time. Fitness warms up from @TrainingLoadReport.WarmUpDays days before the range.
+            </p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Activities</h2>
+        <div class="table-wrap">
+            <table class="data">
+                <thead><tr><th>Date</th><th>Name</th><th>Sport</th><th class="r">Time</th><th class="r">Load</th><th>Method</th></tr></thead>
+                <tbody>
+                    @foreach (var l in r.Activities.Take(50))
+                    {
+                        <tr>
+                            <td class="num">@l.Activity.StartDateLocal.ToString("ddd d MMM yyyy")</td>
+                            <td><a href="@($"activities/{l.Activity.StravaId}")">@l.Activity.Name</a></td>
+                            <td>@l.Activity.SportType</td>
+                            <td class="r">@Units.FormatClock(l.Activity.MovingTimeS)</td>
+                            <td class="r">@l.Load.ToString("0")</td>
+                            <td>@MethodLabels.First(m => m.Method == l.Method).Label</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No training load</h2><p>No activities match the filter.</p></div> }
+
+@code {
+    private static readonly (LoadMethod Method, string Label)[] MethodLabels =
+    [
+        (LoadMethod.Power, "Power (TSS)"), (LoadMethod.HeartRate, "Heart rate (TRIMP)"),
+        (LoadMethod.RelativeEffort, "Relative Effort"), (LoadMethod.Duration, "Duration estimate"),
+    ];
+
+    private TrainingLoadResult? _result;
+    private ApexChartOptions<LoadDay> _ff = UiTheme.ChartOptions<LoadDay>(false);
+    private ApexChartOptions<PeriodValue> _weekly = UiTheme.ChartOptions<PeriodValue>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct) => _result = await Report.RunAsync(Filter, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _ff = UiTheme.ChartOptions<LoadDay>(Dark, "load");
+        _ff.Colors = [UiTheme.Palette[1], UiTheme.Palette[3], UiTheme.Palette[2]];
+        _ff.Fill = new Fill { Opacity = new List<double> { 1, 1, 0.2 } };
+        _weekly = UiTheme.ChartOptions<PeriodValue>(Dark, "load");
+    }
+
+    private static string FormLabel(double form) => form switch
+    {
+        > 5 => "fresh",
+        > -10 => "neutral",
+        > -30 => "productive training",
+        _ => "high fatigue",
+    };
+}

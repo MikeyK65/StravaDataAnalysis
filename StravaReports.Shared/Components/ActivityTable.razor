@@ -1,0 +1,42 @@
+<div class="table-wrap">
+    <table class="data">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Name</th>
+                <th>Sport</th>
+                <th class="r">Distance</th>
+                <th class="r">Time</th>
+                <th class="r">Pace / speed</th>
+                <th class="r">Elev.</th>
+                <th class="r">HR</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var a in Rows)
+            {
+                <tr>
+                    <td class="num">@a.StartDateLocal.ToString("ddd d MMM yyyy")</td>
+                    <td><a href="@(a.FromArchive ? $"archive?q={a.StravaId}" : $"activities/{a.StravaId}")">@Trim(a.Name)</a>@if (a.FromArchive) { <span class="badge" title="From the export archive">archive</span> }</td>
+                    <td>@a.SportType @if (a.IsTrainer) {<span class="badge">trainer</span>} @if (a.IsCommute) {<span class="badge">commute</span>}</td>
+                    <td class="r">@Units.FormatDistance(a.DistanceM, UnitsSystem, 2)</td>
+                    <td class="r">@Units.FormatClock(a.MovingTimeS)</td>
+                    <td class="r">@PaceOrSpeed(a)</td>
+                    <td class="r">@Units.FormatElevation(a.ElevationGainM, UnitsSystem)</td>
+                    <td class="r">@(a.AvgHr is { } hr ? hr.ToString("0") : "–")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ActivityRow> Rows { get; set; } = [];
+    [Parameter] public UnitSystem UnitsSystem { get; set; }
+
+    private string PaceOrSpeed(ActivityRow a) => SportGroups.Classify(a.SportType) == SportGroup.Run || a.SportType is "Walk" or "Hike"
+        ? Units.FormatPace(Calc.PaceSecondsPerUnit(a.DistanceM, a.MovingTimeS, UnitsSystem), UnitsSystem)
+        : a.DistanceM > 0 ? Units.FormatSpeed(a.AvgSpeed, UnitsSystem) : "–";
+
+    private static string Trim(string s) => s.Length > 48 ? s[..47] + "…" : s;
+}

@@ -1,0 +1,13 @@
+.account-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.account-card {
+    width: 100%;
+    max-width: 380px;
+}

@@ -1,0 +1,83 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject SyncEngine Sync
+@inject NavigationManager Nav
+
+<div class="shell @(_navOpen ? "nav-open" : "")">
+    <aside class="sidebar">
+        <a class="brand" href="" @onclick="CloseNav">
+            <span class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 17h3l3-7 3 7h3L9 3 3 17zm12 0 2 4 2-4h-1.6L17 15.4 15.6 17H15z" /></svg>
+            </span>
+            <span>Strava Reports</span>
+        </a>
+        <NavMenu OnNavigate="CloseNav" />
+    </aside>
+    <div class="scrim" @onclick="CloseNav"></div>
+
+    <div class="main">
+        <header class="topbar">
+            <button class="icon-btn menu-btn" aria-label="Open menu" @onclick="() => _navOpen = !_navOpen">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z" /></svg>
+            </button>
+            <div class="topbar-spacer"></div>
+            <a class="sync-chip @(_progress.IsRunning ? "running" : "")" href="sync" title="Sync status">
+                <span class="dot"></span>
+                @(_progress.IsRunning ? $"Syncing: {_progress.Stage}" : "Sync")
+            </a>
+        </header>
+
+        <main class="content">
+            <ErrorBoundary @ref="_errorBoundary">
+                <ChildContent>@Body</ChildContent>
+                <ErrorContent Context="ex">
+                    <div class="card error-card">
+                        <h2>Something went wrong</h2>
+                        <p class="muted">@ex.Message</p>
+                        <button class="btn" @onclick="Recover">Try again</button>
+                    </div>
+                </ErrorContent>
+            </ErrorBoundary>
+        </main>
+
+        <footer class="footer">
+            <span class="powered">Powered by <strong>Strava</strong></span>
+            <span class="sep">·</span>
+            <a href="about">About</a>
+        </footer>
+    </div>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    private bool _navOpen;
+    private SyncProgress _progress = new(false, "Idle", "");
+    private ErrorBoundary? _errorBoundary;
+
+    protected override void OnInitialized()
+    {
+        _progress = Sync.Progress;
+        Sync.ProgressChanged += OnProgress;
+        Nav.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnProgress(SyncProgress p) => InvokeAsync(() => { _progress = p; StateHasChanged(); });
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) =>
+        InvokeAsync(() => { _errorBoundary?.Recover(); });
+
+    private void CloseNav() => _navOpen = false;
+
+    private void Recover() => _errorBoundary?.Recover();
+
+    public void Dispose()
+    {
+        Sync.ProgressChanged -= OnProgress;
+        Nav.LocationChanged -= OnLocationChanged;
+    }
+}

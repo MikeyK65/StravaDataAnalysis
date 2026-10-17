@@ -1,0 +1,224 @@
+@page "/backup"
+@implements IDisposable
+@inject BackupService Backups
+@inject IFileSaver Saver
+@inject IHostInfo Host
+@inject AppSettingsService SettingsService
+@inject IServiceProvider Services
+@inject NavigationManager Nav
+
+<PageTitle>Backup · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Backup and restore</h1>
+        <p class="muted">A backup holds your activities, gear, settings, sync progress and optionally the export archive. It never holds your Client Secret, tokens or password, which stay in @(Host.SupportsWebhooks ? "this server's encrypted store" : "this device's secure storage").</p>
+    </div>
+</div>
+
+@if (_message is not null) { <div class="alert @(_ok ? "ok" : "danger")">@_message</div> }
+
+<div class="card">
+    <h2>Create a backup</h2>
+    <div class="form-grid">
+        <label class="check"><input type="checkbox" @bind="_includeArchive" /> Include the export archive</label>
+        <label class="check"><input type="checkbox" @bind="_includeStreams" /> Include streams (much larger; otherwise re-downloaded)</label>
+    </div>
+    <div class="btn-row" style="margin-top:.75rem">
+        <button class="btn btn-primary" disabled="@_busy" @onclick="CreateAsync">@(_busy && _stage == "create" ? "Creating…" : "Download backup")</button>
+    </div>
+</div>
+
+@if (Host.SupportsWebhooks && Services.GetService<TransferCodeService>() is { } transfers)
+{
+    <div class="card">
+        <h2>Send to the app</h2>
+        <p class="small">Copies this server's database into the iPhone or desktop app. Create a code here, then in the app open Backup → Import from web app and enter it. The code works once and expires after @TransferCodeService.Lifetime.TotalMinutes minutes.</p>
+        @if (_ticket is { } t)
+        {
+            <div class="transfer-code" aria-label="Transfer code">@t.Code</div>
+            <p class="muted small">Expires at @t.ExpiresUtc.ToLocalTime().ToString("HH:mm") · @Size(t.Bytes) · @t.Manifest.Activities.ToString("N0") activities</p>
+            <button class="btn" @onclick="() => { transfers.Revoke(t.Code); _ticket = null; }">Cancel code</button>
+        }
+        else
+        {
+            <button class="btn" disabled="@_busy" @onclick="() => CreateCodeAsync(transfers)">@(_busy && _stage == "code" ? "Preparing…" : "Create transfer code")</button>
+        }
+    </div>
+}
+
+@if (Host.CanImportFromWebApp)
+{
+    <div class="card">
+        <h2>Import from web app</h2>
+        <p class="small">Replaces this device's data with the web app's database. On the web app, open Backup → Send to the app to get a code.</p>
+        <div class="form-grid">
+            <div class="field"><label for="b-url">Web app address</label><input id="b-url" type="url" placeholder="https://reports.example.com" @bind="_webUrl" /></div>
+            <div class="field"><label for="b-code">Transfer code</label><input id="b-code" type="text" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX-XXXX" @bind="_code" /></div>
+        </div>
+        <div class="btn-row" style="margin-top:.75rem;align-items:center">
+            <button class="btn" disabled="@(_busy || string.IsNullOrWhiteSpace(_webUrl) || string.IsNullOrWhiteSpace(_code))" @onclick="DownloadFromWebAsync">Download</button>
+            @if (_busy && _stage == "download") { <span class="muted small">@Size(_downloaded) received…</span> }
+        </div>
+    </div>
+}
+
+<div class="card">
+    <h2>Restore from a backup file</h2>
+    <p class="small">Choose a backup .zip made by this app on any device. It is checked before anything changes, and the current data is saved first so a restore can be undone.</p>
+    <InputFile OnChange="OnFileAsync" accept=".zip" disabled="@_busy" />
+    @if (_busy && _stage == "upload") { <span class="muted small"> Reading file…</span> }
+</div>
+
+@if (_inspection is { } i)
+{
+    <div class="card">
+        <h2>Ready to restore</h2>
+        @if (i.Manifest is { } m)
+        {
+            <dl class="stat-rows" style="max-width:560px">
+                <dt>Created</dt><dd>@m.CreatedUtc.ToLocalTime().ToString("d MMM yyyy HH:mm") on @(string.IsNullOrEmpty(m.Platform) ? "unknown" : m.Platform)</dd>
+                <dt>Athlete</dt><dd>@(m.AthleteName ?? "–")</dd>
+                <dt>Activities</dt><dd>@m.Activities.ToString("N0")</dd>
+                <dt>Export archive</dt><dd>@(i.HasArchive ? $"{m.ArchivedActivities:N0} activities" : "not included")</dd>
+                <dt>Streams</dt><dd>@(m.IncludesStreams ? "included" : "not included")</dd>
+            </dl>
+        }
+        @foreach (var e in i.Errors) { <div class="alert danger" style="margin-top:.5rem">@e</div> }
+        @foreach (var w in i.Warnings) { <div class="alert warn" style="margin-top:.5rem">@w</div> }
+        @if (i.IsValid)
+        {
+            <div class="form-grid" style="margin-top:.75rem">
+                <label class="check"><input type="checkbox" @bind="_keepSettings" /> Keep this @(Host.SupportsWebhooks ? "server's" : "device's") settings (units, sync, relay URL…)</label>
+                @if (i.HasArchive) { <label class="check"><input type="checkbox" @bind="_restoreArchive" /> Replace the export archive too</label> }
+            </div>
+            <div class="btn-row" style="margin-top:.75rem;align-items:center">
+                <input type="text" placeholder="Type RESTORE" @bind="_confirm" @bind:event="oninput" style="max-width:160px" aria-label="Type RESTORE to confirm" />
+                <button class="btn btn-danger" disabled="@(_busy || _confirm != "RESTORE")" @onclick="RestoreAsync">@(_busy && _stage == "restore" ? "Restoring…" : "Replace current data")</button>
+                <button class="btn" disabled="@_busy" @onclick="Discard">Cancel</button>
+            </div>
+        }
+    </div>
+}
+
+@if (_restored is { } r)
+{
+    <div class="card">
+        <h2>Restored</h2>
+        <p>@r.Activities.ToString("N0") activities@(r.ArchiveRestored ? $" and {r.ArchivedActivities:N0} archived activities" : "") are now in place. The previous data was saved as <code>@System.IO.Path.GetFileName(r.SafetyCopyPath)</code>.</p>
+        <button class="btn btn-primary" @onclick="@(() => Nav.NavigateTo("", forceLoad: true))">Reload the app</button>
+    </div>
+}
+
+@code {
+    /// <summary>Backups with streams can be large; allow up to 4 GB.</summary>
+    private const long MaxUploadBytes = 4L * 1024 * 1024 * 1024;
+
+    private bool _includeArchive = true, _includeStreams = true, _keepSettings = true, _restoreArchive = true;
+    private bool _busy, _ok;
+    private string? _stage, _message, _webUrl, _code;
+    private string _confirm = "";
+    private long _downloaded;
+    private string? _pendingZip;
+    private BackupInspection? _inspection;
+    private RestoreResult? _restored;
+    private TransferTicket? _ticket;
+
+    protected override async Task OnInitializedAsync() => _webUrl = (await SettingsService.GetAsync()).MobileRelayBaseUrl;
+
+    private async Task CreateAsync()
+    {
+        await Run("create", async () =>
+        {
+            var file = await Backups.CreateAsync(new BackupOptions(_includeArchive, _includeStreams));
+            try
+            {
+                await using var stream = File.OpenRead(file.Path);
+                var where = await Saver.SaveAsync(file.FileName, "application/zip", stream);
+                Show($"{where} {Size(file.Bytes)}, {file.Manifest.Activities:N0} activities.", true);
+            }
+            finally { TryDelete(file.Path); }
+        });
+    }
+
+    private async Task CreateCodeAsync(TransferCodeService transfers) =>
+        await Run("code", async () => _ticket = await transfers.CreateAsync(new BackupOptions(_includeArchive, _includeStreams)));
+
+    private async Task DownloadFromWebAsync()
+    {
+        await Run("download", async () =>
+        {
+            Discard();
+            var path = TempZip();
+            var progress = new Progress<long>(n => { _downloaded = n; InvokeAsync(StateHasChanged); });
+            try { await Services.GetRequiredService<TransferClient>().DownloadAsync(_webUrl!, _code!, path, progress); }
+            catch { TryDelete(path); throw; }
+            await InspectAsync(path);
+            _code = null;
+        });
+    }
+
+    private async Task OnFileAsync(InputFileChangeEventArgs e)
+    {
+        await Run("upload", async () =>
+        {
+            Discard();
+            var path = TempZip();
+            // Copy asynchronously first: browser upload streams cannot be read synchronously.
+            await using (var src = e.File.OpenReadStream(MaxUploadBytes))
+            await using (var dst = File.Create(path))
+                await src.CopyToAsync(dst);
+            await InspectAsync(path);
+        });
+    }
+
+    private async Task InspectAsync(string path)
+    {
+        _pendingZip = path;
+        _inspection = await Backups.InspectAsync(path);
+        _restored = null;
+        if (!_inspection.IsValid) Show("This file cannot be restored.", false);
+    }
+
+    private async Task RestoreAsync()
+    {
+        await Run("restore", async () =>
+        {
+            _restored = await Backups.RestoreAsync(_pendingZip!, new BackupRestoreOptions(_keepSettings, _restoreArchive));
+            Discard();
+            Show("Backup restored.", true);
+        });
+    }
+
+    private void Discard()
+    {
+        if (_pendingZip is not null) TryDelete(_pendingZip);
+        _pendingZip = null;
+        _inspection = null;
+        _confirm = "";
+    }
+
+    private async Task Run(string stage, Func<Task> action)
+    {
+        _busy = true;
+        _stage = stage;
+        _message = null;
+        _downloaded = 0;
+        try { await action(); }
+        catch (Exception ex) { Show(ex.Message, false); }
+        finally { _busy = false; _stage = null; }
+    }
+
+    private void Show(string message, bool ok) { _message = message; _ok = ok; }
+
+    private static string TempZip() => System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"stravareports-restore-{Guid.NewGuid():N}.zip");
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch (IOException) { }
+    }
+
+    private static string Size(long bytes) => bytes >= 1024 * 1024 ? $"{bytes / 1024.0 / 1024:0.0} MB" : $"{bytes / 1024.0:0} KB";
+
+    public void Dispose() => Discard();
+}

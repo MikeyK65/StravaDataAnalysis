@@ -1,0 +1,159 @@
+@inherits ReportViewBase
+@inject RecordsReport Report
+
+<FilterBar ShowSport="false" />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { } r && (r.Bests.Count > 0 || r.Highlights.Count > 0 || r.WholeRuns.Count > 0))
+{
+    @if (r.RunsWithoutDetail > 0)
+    {
+        <div class="alert warn">@r.RunsWithoutDetail run(s) in this range have no detail yet, so their best efforts are missing. They fill in as the sync queue runs.</div>
+    }
+
+    @if (r.Bests.Count > 0)
+    {
+        <div class="card">
+            <h2>Personal bests</h2>
+            <p class="muted small">From Strava's best efforts on each run, ranked on elapsed time as Strava does. The date range filters which runs count.</p>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Distance</th><th class="r">Best</th><th class="r">Pace</th><th>Date</th><th>Activity</th><th class="r">Last 12 months</th><th class="r">Efforts</th></tr></thead>
+                    <tbody>
+                        @foreach (var b in r.Bests)
+                        {
+                            <tr>
+                                <td><strong>@b.Name</strong></td>
+                                <td class="r">@Units.FormatClock(b.ElapsedTimeS)</td>
+                                <td class="r">@Pace(b.DistanceM, b.ElapsedTimeS)</td>
+                                <td class="num">@b.StartDateLocal.ToString("d MMM yyyy")</td>
+                                <td><a href="@($"activities/{b.StravaId}")">@b.ActivityName</a></td>
+                                <td class="r">@(b.Last12MonthsBestS is { } s ? Units.FormatClock(s) : "–")</td>
+                                <td class="r">@b.Count</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <h2>PB timeline</h2>
+                <select aria-label="Distance" value="@_effort" @onchange="e => { _effort = e.Value?.ToString(); BuildCharts(); Bump(); }">
+                    @foreach (var b in r.Bests) { <option value="@b.Name">@b.Name</option> }
+                </select>
+            </div>
+            <p class="muted small">Each point is a run that beat every earlier effort at this distance.</p>
+            @{ var points = r.Timeline.Where(t => t.Name == _effort).ToList(); }
+            <ApexChart @key="@($"t{Version}-{_bump}")" TItem="EffortPoint" Options="_timeline" Height="280" XAxisType="XAxisType.Datetime">
+                <ApexPointSeries TItem="EffortPoint" Items="points" Name="Time (min)" SeriesType="SeriesType.Line"
+                                 XValue="@(p => p.StartDateLocal)" YValue="@(p => (decimal)Math.Round(p.ElapsedTimeS / 60.0, 2))" />
+            </ApexChart>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Date</th><th class="r">Time</th><th class="r">Improvement</th></tr></thead>
+                    <tbody>
+                        @for (var i = points.Count - 1; i >= 0; i--)
+                        {
+                            var p = points[i];
+                            <tr>
+                                <td class="num"><a href="@($"activities/{p.StravaId}")">@p.StartDateLocal.ToString("d MMM yyyy")</a></td>
+                                <td class="r">@Units.FormatClock(p.ElapsedTimeS)</td>
+                                <td class="r">@(i == 0 ? "first" : $"−{Units.FormatClock(points[i - 1].ElapsedTimeS - p.ElapsedTimeS)}")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="card empty"><h2>No best efforts yet</h2><p>Best efforts come from synced activity detail. Keep "Fetch activity detail" on in Settings and let the queue run. Archive runs have none, but they still count in the fastest-run table below.</p></div>
+    }
+
+    @if (r.WholeRuns.Count > 0)
+    {
+        <div class="card">
+            <h2>Fastest runs at standard distances</h2>
+            <p class="muted small">The fastest whole run within 3% under to 10% over each distance, ranked on moving time. These are complete runs, not splits, so they work for archive runs too and are slower than a true best effort.</p>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Distance</th><th class="r">Time</th><th class="r">Run length</th><th class="r">Pace</th><th>Date</th><th>Activity</th></tr></thead>
+                    <tbody>
+                        @foreach (var w in r.WholeRuns)
+                        {
+                            <tr>
+                                <td><strong>@w.Label</strong></td>
+                                <td class="r">@Units.FormatClock(w.Run.MovingTimeS)</td>
+                                <td class="r">@Dist(w.Run.DistanceM, 2)</td>
+                                <td class="r">@Pace(w.Run.DistanceM, w.Run.MovingTimeS)</td>
+                                <td class="num">@w.Run.StartDateLocal.ToString("d MMM yyyy")</td>
+                                <td><a href="@Href(w.Run.StravaId, w.Run.FromArchive)">@w.Run.Name</a>@if (w.Run.FromArchive) { <span class="badge" title="From the export archive">archive</span> }</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (r.Highlights.Count > 0)
+    {
+        <div class="card">
+            <h2>Biggest and longest</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Record</th><th class="r">Value</th><th>Date</th><th>Activity</th></tr></thead>
+                    <tbody>
+                        @foreach (var h in r.Highlights)
+                        {
+                            <tr>
+                                <td>@h.Label</td>
+                                <td class="r"><strong>@Format(h)</strong></td>
+                                <td class="num">@(h.StravaId is null ? $"week of {h.Date:d MMM yyyy}" : h.Date.ToString("d MMM yyyy"))</td>
+                                <td>@if (h.StravaId is { } id) { <a href="@Href(id, h.FromArchive)">@h.ActivityName</a> }</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No records</h2><p>No activities match the filter.</p></div> }
+
+@code {
+    private RecordsResult? _result;
+    private string? _effort;
+    private int _bump;
+    private ApexChartOptions<EffortPoint> _timeline = UiTheme.ChartOptions<EffortPoint>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct)
+    {
+        _result = await Report.RunAsync(Filter, Settings, ct);
+        if (_effort is null || _result.Bests.All(b => b.Name != _effort))
+            _effort = _result.Bests.FirstOrDefault(b => b.Name == "5k")?.Name ?? _result.Bests.FirstOrDefault()?.Name;
+    }
+
+    protected override void BuildCharts()
+    {
+        _timeline = UiTheme.ChartOptions<EffortPoint>(Dark, "minutes");
+        _timeline.Markers = new Markers { Size = 5 };
+        _timeline.Stroke = new Stroke { Width = 2, Curve = Curve.Stepline };
+    }
+
+    private void Bump() => _bump++;
+
+    private static string Href(long id, bool archive) => archive ? $"archive?q={id}" : $"activities/{id}";
+
+    private string Format(Highlight h) => h.Kind switch
+    {
+        HighlightKind.Distance => Dist(h.Value, 1),
+        HighlightKind.Elevation => Elev(h.Value),
+        HighlightKind.Speed => Speed(h.Value),
+        _ => Units.FormatClock((int)h.Value),
+    };
+}

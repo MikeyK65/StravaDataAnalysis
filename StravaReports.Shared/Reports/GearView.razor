@@ -1,0 +1,51 @@
+@inherits ReportViewBase
+@inject GearReport Report
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_gear is { Count: > 0 } list)
+{
+    @foreach (var g in list.Where(x => x.NeedsRetirement))
+    {
+        <div class="alert warn">
+            <strong>@g.Gear.Name</strong> has passed @Dist(Settings.ShoeRetirementKm * 1000, 0); consider retiring it.
+        </div>
+    }
+
+    <div class="grid grid-3">
+        @foreach (var g in list)
+        {
+            var total = Math.Max(g.Gear.DistanceM, g.LocalDistanceM);
+            <div class="card stat">
+                <div class="card-head">
+                    <div class="label">@(g.Gear.GearType == "bike" ? "Bike" : "Shoes")</div>
+                    <div>
+                        @if (g.Gear.IsPrimary) { <span class="badge accent">primary</span> }
+                        @if (g.Gear.IsRetired) { <span class="badge">retired</span> }
+                    </div>
+                </div>
+                <h3>@g.Gear.Name</h3>
+                <div class="value">@Dist(total, 0)</div>
+                @if (g.Gear.GearType == "shoe" && !g.Gear.IsRetired)
+                {
+                    var f = Math.Clamp(total / 1000 / Settings.ShoeRetirementKm, 0, 1);
+                    <div class="meter @(f < .7 ? "ok" : f < 1 ? "" : "warn")"><span style="width:@((f * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture))%"></span></div>
+                    <div class="sub" style="margin-top:.3rem">@((f * 100).ToString("0"))% of @Dist(Settings.ShoeRetirementKm * 1000, 0)</div>
+                }
+                <dl class="stat-rows">
+                    <dt>Activities (local)</dt><dd>@g.ActivityCount</dd>
+                    <dt>Local distance</dt><dd>@Dist(g.LocalDistanceM, 0)</dd>
+                    <dt>Last used</dt><dd>@(g.LastUsedLocal?.ToString("d MMM yyyy") ?? "–")</dd>
+                </dl>
+            </div>
+        }
+    </div>
+    <p class="muted small" style="margin-top:1rem">Distance is Strava's figure for the gear, or the local total if larger. Set the shoe retirement distance in Settings.</p>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No gear yet</h2><p>Gear is fetched with your athlete profile during sync.</p></div> }
+
+@code {
+    private List<GearUsage>? _gear;
+
+    protected override async Task LoadAsync(CancellationToken ct) => _gear = await Report.RunAsync(Settings, ct);
+}

@@ -1,0 +1,14 @@
+@page "/account/logout"
+@layout AccountLayout
+@attribute [ExcludeFromInteractiveRouting]
+
+<PageTitle>Sign out · Strava Reports</PageTitle>
+
+<h1 style="font-size:1.3rem">Sign out?</h1>
+<form method="post" action="account/signout">
+    <AntiforgeryToken />
+    <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Sign out</button>
+        <a class="btn" href="">Cancel</a>
+    </div>
+</form>

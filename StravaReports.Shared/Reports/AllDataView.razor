@@ -1,0 +1,394 @@
+@inherits ReportViewBase
+@inject AllDataReport Report
+@inject IFileSaver Saver
+
+<FilterBar />
+
+<div class="card">
+    <div class="card-head">
+        <h2>Refine</h2>
+        <button class="btn" disabled="@(!_query.IsFiltered)" @onclick="ClearRefine">Clear refinements</button>
+    </div>
+    <div class="refine-grid">
+        <div class="field wide-2">
+            <label for="r-text">Search</label>
+            <input id="r-text" type="text" placeholder="Name, sport or gear, e.g. trek fuel" @bind="_text" @bind:event="onchange" @bind:after="Requery" />
+            <span class="hint">Every word must match. Press Enter to apply.</span>
+        </div>
+        <div class="field">
+            <label>Distance (@DU)</label>
+            <div class="range">
+                <input type="number" min="0" step="any" placeholder="min" aria-label="Minimum distance" @bind="_minDist" @bind:event="onchange" @bind:after="Requery" />
+                <input type="number" min="0" step="any" placeholder="max" aria-label="Maximum distance" @bind="_maxDist" @bind:event="onchange" @bind:after="Requery" />
+            </div>
+        </div>
+        <div class="field">
+            <label>Moving time (minutes)</label>
+            <div class="range">
+                <input type="number" min="0" step="any" placeholder="min" aria-label="Minimum minutes" @bind="_minMin" @bind:event="onchange" @bind:after="Requery" />
+                <input type="number" min="0" step="any" placeholder="max" aria-label="Maximum minutes" @bind="_maxMin" @bind:event="onchange" @bind:after="Requery" />
+            </div>
+        </div>
+        <div class="field">
+            <label>Elevation (@Units.ElevationUnit(U))</label>
+            <div class="range">
+                <input type="number" min="0" step="any" placeholder="min" aria-label="Minimum elevation" @bind="_minElev" @bind:event="onchange" @bind:after="Requery" />
+                <input type="number" min="0" step="any" placeholder="max" aria-label="Maximum elevation" @bind="_maxElev" @bind:event="onchange" @bind:after="Requery" />
+            </div>
+        </div>
+        <div class="field">
+            <label for="r-day">Day of week</label>
+            <select id="r-day" @bind="_day" @bind:after="Requery">
+                <option value="">Any day</option>
+                @foreach (var d in Days)
+                {
+                    <option value="@((int)d)">@d</option>
+                }
+            </select>
+        </div>
+        <div class="checks">
+            <label class="check"><input type="checkbox" @bind="_needHr" @bind:after="Requery" /> Has heart rate</label>
+            <label class="check"><input type="checkbox" @bind="_needPower" @bind:after="Requery" /> Has power</label>
+        </div>
+    </div>
+</div>
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { } r)
+{
+    var s = r.Summary;
+    <p class="muted showing" aria-live="polite">
+        Showing <strong>@r.Rows.Count.ToString("N0")</strong> of @r.LoadedCount.ToString("N0") activities@(s.First is { } f && s.Last is { } l ? $" · {f:d MMM yyyy} to {l:d MMM yyyy}" : "")@(_query.IsFiltered ? " · refinements on" : "").
+    </p>
+
+    @if (r.Rows.Count == 0)
+    {
+        <div class="card empty"><h2>No activities match</h2><p>Loosen the filters above@(_query.IsFiltered ? " or clear the refinements" : "").</p></div>
+    }
+    else
+    {
+        <div class="grid grid-4">
+            <div class="card stat"><div class="label">Distance</div><div class="value">@Dist(s.DistanceM, 1)</div>
+                <div class="sub">@Dist(s.AvgDistanceM, 1) per activity · longest @Dist(s.Longest?.DistanceM ?? 0, 1)</div></div>
+            <div class="card stat"><div class="label">Activities</div><div class="value">@s.Count.ToString("N0")</div>
+                <div class="sub">@s.ActiveDays.ToString("N0") active days · @s.ActivitiesPerWeek.ToString("0.0") per week</div></div>
+            <div class="card stat"><div class="label">Moving time</div><div class="value">@Units.FormatDuration(s.MovingTimeS)</div>
+                <div class="sub">elapsed @Units.FormatDuration(s.ElapsedTimeS) · stopped @Units.FormatDuration(s.StoppedTimeS)</div></div>
+            <div class="card stat"><div class="label">Elevation gain</div><div class="value">@Elev(s.ElevationGainM)</div>
+                <div class="sub">@ClimbRate(s) · biggest @Elev(s.BiggestClimb?.ElevationGainM ?? 0)</div></div>
+            <div class="card stat"><div class="label">Average speed</div><div class="value">@(s.AvgSpeedMps is { } v ? Speed(v) : "–")</div>
+                <div class="sub">pace @Pace(s.DistanceM, s.MovingTimeS) · over moving time</div></div>
+            <div class="card stat"><div class="label">Per week</div><div class="value">@Dist(s.DistancePerWeekM, 1)</div>
+                <div class="sub">@Units.FormatDuration((int)s.TimePerWeekS) · over @s.PeriodDays.ToString("N0") days</div></div>
+            <div class="card stat"><div class="label">Heart rate</div><div class="value">@(s.AvgHr is { } hr ? $"{hr:0} bpm" : "–")</div>
+                <div class="sub">@(s.MaxHr is { } mhr ? $"max {mhr:0} bpm · " : "")@s.WithHrCount.ToString("N0") with heart rate</div></div>
+            <div class="card stat"><div class="label">Power &amp; effort</div><div class="value">@(s.AvgWatts is { } w ? $"{w:0} W" : "–")</div>
+                <div class="sub">@(s.Kilojoules is { } kj ? $"{kj:N0} kJ" : "no energy data")@(s.EffortSum is { } ef ? $" · effort {ef:N0}" : "")</div></div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <h2>@_chartTitle</h2>
+            </div>
+            <ApexChart @key="@($"m{Version}-{_chartKey}")" TItem="DataGroup" Options="_chart" Height="260">
+                <ApexPointSeries TItem="DataGroup" Items="_chartItems" Name="@($"Distance ({DU})")" SeriesType="SeriesType.Bar"
+                                 XValue="@(g => g.Label)" YValue="@(g => DistVal(g.Totals.DistanceM))" />
+            </ApexChart>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="card">
+                <h2>Highlights</h2>
+                <dl class="stat-rows">
+                    @Highlight("Longest distance", s.Longest, a => Dist(a.DistanceM, 2))
+                    @Highlight("Longest time", s.LongestTime, a => Units.FormatClock(a.MovingTimeS))
+                    @Highlight("Biggest climb", s.BiggestClimb, a => Elev(a.ElevationGainM))
+                    @Highlight("Fastest (1 km or more)", s.Fastest, a => Speed(a.AvgSpeed))
+                </dl>
+            </div>
+            <div class="card">
+                <h2>Details</h2>
+                <dl class="stat-rows">
+                    <dt>Period</dt><dd>@s.PeriodDays.ToString("N0") days (@s.WeeksInPeriod.ToString("0.0") weeks)</dd>
+                    <dt>Active days</dt><dd>@s.ActiveDays.ToString("N0") (@(s.PeriodDays > 0 ? (100.0 * s.ActiveDays / s.PeriodDays).ToString("0") : "0")%)</dd>
+                    <dt>Average time per activity</dt><dd>@Units.FormatDuration(s.AvgMovingTimeS)</dd>
+                    <dt>Time per week</dt><dd>@Units.FormatDuration((int)s.TimePerWeekS)</dd>
+                    <dt>Trainer / virtual</dt><dd>@s.TrainerCount.ToString("N0")</dd>
+                    <dt>Commutes</dt><dd>@s.CommuteCount.ToString("N0")</dd>
+                    <dt>From the export archive</dt><dd>@s.ArchiveCount.ToString("N0")</dd>
+                    <dt>With power</dt><dd>@s.WithPowerCount.ToString("N0")</dd>
+                    @if (s.AvgCadence is { } cad) { <dt>Average cadence</dt><dd>@cad.ToString("0")</dd> }
+                </dl>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <h2>Breakdown</h2>
+                <div class="seg" role="group" aria-label="Break the totals down by">
+                    @foreach (var (key, label) in Breakdowns)
+                    {
+                        <button class="@(_by == key ? "on" : "")" aria-pressed="@(_by == key)" @onclick="() => _by = key">@label</button>
+                    }
+                </div>
+            </div>
+            <div class="table-wrap scroll-y">
+                <table class="data">
+                    <thead>
+                        <tr>
+                            <th>@BreakdownLabel</th><th class="r">Activities</th><th class="r">Distance</th><th class="r">Time</th>
+                            <th class="r">Elevation</th><th class="r">Avg speed</th><th class="share-col">Share of distance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in CurrentBreakdown)
+                        {
+                            <tr>
+                                <td>@g.Label</td>
+                                <td class="r">@g.Totals.Count.ToString("N0")</td>
+                                <td class="r">@Dist(g.Totals.DistanceM, 1)</td>
+                                <td class="r">@Units.FormatDuration(g.Totals.MovingTimeS)</td>
+                                <td class="r">@Elev(g.Totals.ElevationGainM)</td>
+                                <td class="r">@(g.AvgSpeedMps is { } gv ? Speed(gv) : "–")</td>
+                                <td class="share-col"><div class="meter" title="@((g.Share * 100).ToString("0.#"))%"><span style="width:@((g.Share * 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%"></span></div></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <h2>Activities</h2>
+                <div class="btn-row table-tools">
+                    <label class="check"><input type="checkbox" @bind="_compact" /> Fewer columns</label>
+                    <select aria-label="Rows per page" @bind="_pageSize" @bind:after="ResetPage">
+                        @foreach (var n in PageSizes)
+                        {
+                            <option value="@n">@n per page</option>
+                        }
+                    </select>
+                    <button class="btn" disabled="@_exporting" @onclick="ExportAsync">@(_exporting ? "Exporting…" : "Download CSV")</button>
+                </div>
+            </div>
+            @if (_message is not null) { <div class="alert @(_failed ? "danger" : "ok")">@_message</div> }
+            <div class="table-wrap">
+                <table class="data all-data">
+                    <thead>
+                        <tr>
+                            @Th("Date", DataSort.Date)
+                            @Th("Name", DataSort.Name)
+                            @Th("Sport", DataSort.Sport)
+                            @Th("Gear", DataSort.Gear)
+                            @Th("Distance", DataSort.Distance, true)
+                            @Th("Time", DataSort.Time, true)
+                            @if (!_compact) { @Th("Elapsed", DataSort.Elapsed, true) }
+                            @Th("Speed", DataSort.Speed, true)
+                            <th class="r">Pace</th>
+                            @Th("Elev.", DataSort.Elevation, true)
+                            @Th("Avg HR", DataSort.AvgHr, true)
+                            @if (!_compact)
+                            {
+                                @Th("Max HR", DataSort.MaxHr, true)
+                                @Th("Watts", DataSort.Watts, true)
+                                @Th("kJ", DataSort.Kilojoules, true)
+                                @Th("Cadence", DataSort.Cadence, true)
+                                @Th("Effort", DataSort.Effort, true)
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in PageRows)
+                        {
+                            <tr>
+                                <td class="num" title="@a.StartDateLocal.ToString("HH:mm")">@a.StartDateLocal.ToString("ddd d MMM yyyy")</td>
+                                <td><a href="@Href(a)" title="@a.Name">@Trim(a.Name)</a>@if (a.FromArchive) { <span class="badge" title="From the export archive">archive</span> }</td>
+                                <td>@a.SportType @if (a.IsTrainer) {<span class="badge">trainer</span>} @if (a.IsCommute) {<span class="badge">commute</span>}</td>
+                                <td>@(string.IsNullOrEmpty(a.GearId) ? "–" : _source!.GearName(a.GearId))</td>
+                                <td class="r">@Units.FormatDistance(a.DistanceM, U, 2)</td>
+                                <td class="r">@Units.FormatClock(a.MovingTimeS)</td>
+                                @if (!_compact) { <td class="r">@Units.FormatClock(a.ElapsedTimeS)</td> }
+                                <td class="r">@(a.DistanceM > 0 ? Units.FormatSpeed(a.AvgSpeed, U) : "–")</td>
+                                <td class="r">@Pace(a.DistanceM, a.MovingTimeS)</td>
+                                <td class="r">@Units.FormatElevation(a.ElevationGainM, U)</td>
+                                <td class="r">@Num(a.AvgHr)</td>
+                                @if (!_compact)
+                                {
+                                    <td class="r">@Num(a.MaxHr)</td>
+                                    <td class="r">@Num(a.AvgWatts)</td>
+                                    <td class="r">@Num(a.Kilojoules, "N0")</td>
+                                    <td class="r">@Num(a.AvgCadence)</td>
+                                    <td class="r">@Num(a.SufferScore)</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="4">Total of all @s.Count.ToString("N0") matching</td>
+                            <td class="r">@Units.FormatDistance(s.DistanceM, U, 2)</td>
+                            <td class="r">@Units.FormatDuration(s.MovingTimeS)</td>
+                            @if (!_compact) { <td class="r">@Units.FormatDuration(s.ElapsedTimeS)</td> }
+                            <td class="r">@(s.AvgSpeedMps is { } tv ? Speed(tv) : "–")</td>
+                            <td class="r">@Pace(s.DistanceM, s.MovingTimeS)</td>
+                            <td class="r">@Elev(s.ElevationGainM)</td>
+                            <td class="r">@Num(s.AvgHr)</td>
+                            @if (!_compact)
+                            {
+                                <td class="r">@Num(s.MaxHr)</td>
+                                <td class="r">@Num(s.AvgWatts)</td>
+                                <td class="r">@Num(s.Kilojoules, "N0")</td>
+                                <td class="r">@Num(s.AvgCadence)</td>
+                                <td class="r">@Num(s.EffortSum, "N0")</td>
+                            }
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div class="btn-row pager">
+                <button class="btn" disabled="@(_page == 0)" @onclick="() => Go(-1)">← Previous</button>
+                <span class="muted small">Page @(_page + 1) of @PageCount</span>
+                <button class="btn" disabled="@(_page + 1 >= PageCount)" @onclick="() => Go(1)">Next →</button>
+            </div>
+            <p class="muted small">Footer averages are weighted by moving time; max heart rate is the highest seen. Click a column heading to sort.</p>
+        </div>
+    }
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+
+@code {
+    private static readonly DayOfWeek[] Days = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday];
+    private static readonly int[] PageSizes = [25, 50, 100, 250, 500];
+    private static readonly (string Key, string Label)[] Breakdowns = [("sport", "Sport"), ("gear", "Gear"), ("year", "Year"), ("month", "Month"), ("weekday", "Weekday")];
+
+    private AllDataSource? _source;
+    private AllDataResult? _result;
+    private DataQuery _query = new();
+
+    // Refinement inputs; distances and elevation are in the user's units until Requery converts them.
+    private string? _text;
+    private double? _minDist, _maxDist, _minMin, _maxMin, _minElev, _maxElev;
+    private string _day = "";
+    private bool _needHr, _needPower, _compact;
+
+    private int _page, _pageSize = 50;
+    private string _by = "sport";
+    private bool _exporting, _failed;
+    private string? _message;
+    private string _chartTitle = "";
+    private int _chartKey;
+    private List<DataGroup> _chartItems = [];
+    private ApexChartOptions<DataGroup> _chart = UiTheme.ChartOptions<DataGroup>(false);
+
+    private int PageCount => _result is null ? 1 : Math.Max(1, (_result.Rows.Count + _pageSize - 1) / _pageSize);
+    private IEnumerable<ActivityRow> PageRows => _result is null ? [] : _result.Rows.Skip(_page * _pageSize).Take(_pageSize);
+
+    private IReadOnlyList<DataGroup> CurrentBreakdown => _result is null ? [] : _by switch
+    {
+        "gear" => _result.ByGear,
+        "year" => _result.ByYear,
+        "month" => _result.ByMonth,
+        "weekday" => _result.ByWeekday,
+        _ => _result.BySport,
+    };
+
+    private string BreakdownLabel => Breakdowns.First(b => b.Key == _by).Label;
+
+    protected override async Task LoadAsync(CancellationToken ct)
+    {
+        _source = await Report.LoadAsync(Filter, ct);
+        Requery();
+    }
+
+    protected override void BuildCharts()
+    {
+        _chart = UiTheme.ChartOptions<DataGroup>(Dark, DU);
+    }
+
+    private void Requery()
+    {
+        if (_source is null) return;
+        _query = _query with
+        {
+            Text = string.IsNullOrWhiteSpace(_text) ? null : _text.Trim(),
+            MinDistanceM = DistToM(_minDist), MaxDistanceM = DistToM(_maxDist),
+            MinTimeS = MinutesToS(_minMin), MaxTimeS = MinutesToS(_maxMin),
+            MinElevationM = ElevToM(_minElev), MaxElevationM = ElevToM(_maxElev),
+            Day = int.TryParse(_day, out var d) ? (DayOfWeek)d : null,
+            RequireHeartRate = _needHr,
+            RequirePower = _needPower,
+        };
+        Analyse();
+    }
+
+    private void Analyse()
+    {
+        if (_source is null) return;
+        _result = AllDataReport.Analyse(_source, _query);
+        _page = 0;
+        // Months while there are few enough to read; otherwise years.
+        var months = _result.ByMonth.Count is >= 2 and <= 60;
+        _chartTitle = months ? "Distance per month" : "Distance per year";
+        _chartItems = [.. (months ? _result.ByMonth : _result.ByYear).AsEnumerable().Reverse()];
+        _chartKey++;
+    }
+
+    private void ClearRefine()
+    {
+        (_text, _minDist, _maxDist, _minMin, _maxMin, _minElev, _maxElev, _day, _needHr, _needPower) = (null, null, null, null, null, null, null, "", false, false);
+        Requery();
+    }
+
+    private void SortBy(DataSort sort)
+    {
+        var textual = sort is DataSort.Name or DataSort.Sport or DataSort.Gear;
+        _query = _query with { Sort = sort, Descending = _query.Sort == sort ? !_query.Descending : !textual };
+        Analyse();
+    }
+
+    private void Go(int delta) => _page = Math.Clamp(_page + delta, 0, PageCount - 1);
+
+    private void ResetPage() => _page = 0;
+
+    private async Task ExportAsync()
+    {
+        if (_result is null || _source is null) return;
+        _exporting = true;
+        _message = null;
+        try
+        {
+            var file = Report.Export(_result, _source);
+            var where = await Saver.SaveAsync(file.FileName, ExportFile.ContentType, file.Content);
+            _message = $"{where} {file.Rows:N0} rows.";
+            _failed = false;
+        }
+        catch (Exception ex)
+        {
+            _message = $"Export failed: {ex.Message}";
+            _failed = true;
+        }
+        finally { _exporting = false; }
+    }
+
+    private double? DistToM(double? v) => v is { } x ? (U == UnitSystem.Imperial ? x * Units.MetresPerMile : x * 1000) : null;
+    private double? ElevToM(double? v) => v is { } x ? (U == UnitSystem.Imperial ? x / Units.FeetPerMetre : x) : null;
+    private static int? MinutesToS(double? v) => v is { } x ? (int)Math.Round(x * 60) : null;
+
+    private string ClimbRate(DataSummary s) => s.DistanceM <= 0 ? "no distance"
+        : $"{Units.ElevationValue(s.ElevationGainM, U) / Units.DistanceValue(s.DistanceM, U):N0} {Units.ElevationUnit(U)} per {Units.DistanceUnit(U)}";
+
+    private static string Num(double? v, string format = "0") => v is { } x ? x.ToString(format) : "–";
+
+    private static string Href(ActivityRow a) => a.FromArchive ? $"archive?q={a.StravaId}" : $"activities/{a.StravaId}";
+
+    private static string Trim(string s) => s.Length > 48 ? s[..47] + "…" : s;
+
+    private RenderFragment Highlight(string label, ActivityRow? a, Func<ActivityRow, string> value) => a is null ? @<text></text> :
+        @<text><dt>@label</dt><dd><a href="@Href(a)" title="@a.Name">@value(a)</a> <span class="muted small">@a.StartDateLocal.ToString("d MMM yyyy")</span></dd></text>;
+
+    private RenderFragment Th(string label, DataSort sort, bool right = false) =>
+        @<th class="@(right ? "r" : "")" aria-sort="@(_query.Sort == sort ? (_query.Descending ? "descending" : "ascending") : "none")">
+            <button class="th-btn" title="Sort by @label" @onclick="() => SortBy(sort)">@label@(_query.Sort == sort ? (_query.Descending ? " ▼" : " ▲") : "")</button>
+        </th>;
+}

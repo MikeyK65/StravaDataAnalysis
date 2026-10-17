@@ -1,0 +1,86 @@
+@inherits ReportViewBase
+@inject ConsistencyReport Report
+
+<FilterBar />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { } r)
+{
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Active days</div><div class="value">@r.ActiveDays</div><div class="sub">of @((r.To.DayNumber - r.From.DayNumber + 1)) days</div></div>
+        <div class="card stat"><div class="label">Current streak</div><div class="value">@r.CurrentDailyStreak</div><div class="sub">days in a row</div></div>
+        <div class="card stat"><div class="label">Longest streak</div><div class="value">@r.LongestDailyStreak</div><div class="sub">days in a row</div></div>
+        <div class="card stat"><div class="label">Weekly streak</div><div class="value">@r.CurrentWeeklyStreak</div><div class="sub">longest @r.LongestWeeklyStreak weeks</div></div>
+    </div>
+
+    <div class="card">
+        <h2>Calendar</h2>
+        <div class="heatmap">
+            @{
+                var weeks = (r.Days.Count + 6) / 7;
+                const int cell = 13, gap = 3, left = 28, top = 18;
+                var width = left + weeks * (cell + gap);
+                var max = Math.Max(1, r.Days.Max(d => d.MovingTimeS));
+            }
+            <svg width="@width" height="@(top + 7 * (cell + gap))" role="img" aria-label="Activity calendar heatmap">
+                @for (var i = 0; i < 7; i += 2)
+                {
+                    var dow = (DayOfWeek)(((int)Settings.WeekStart + i) % 7);
+                    <g><text class="heat-label" x="0" y="@(top + i * (cell + gap) + 10)">@dow.ToString()[..3]</text></g>
+                }
+                @for (var i = 0; i < r.Days.Count; i++)
+                {
+                    var d = r.Days[i];
+                    var w = i / 7;
+                    var row = i % 7;
+                    if (d.Day.Day <= 7 && row == 0)
+                    {
+                        <g><text class="heat-label" x="@(left + w * (cell + gap))" y="11">@d.Day.ToString("MMM")</text></g>
+                    }
+                    if (d.Day < r.From) { continue; }
+                    <rect x="@(left + w * (cell + gap))" y="@(top + row * (cell + gap))" width="@cell" height="@cell" rx="2"
+                          class="@HeatClass(d, max)">
+                        <title>@d.Day.ToString("ddd d MMM yyyy"): @(d.Count == 0 ? "rest" : $"{d.Count} × {Dist(d.DistanceM)}, {Units.FormatDuration(d.MovingTimeS)}")</title>
+                    </rect>
+                }
+            </svg>
+        </div>
+        <div class="legend-row">Less
+            <i style="background:var(--heat-0)"></i><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i><i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i>
+            More (by moving time)</div>
+    </div>
+
+    <div class="card">
+        <h2>Activities per week</h2>
+        <div class="chart-box">
+            <ApexChart @key="Version" TItem="WeekCount" Options="_options" Height="260">
+                <ApexPointSeries TItem="WeekCount" Items="_weeks" Name="Activities" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => w.Count)" />
+            </ApexChart>
+        </div>
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+
+@code {
+    private ConsistencyResult? _result;
+    private List<WeekCount> _weeks = [];
+    private ApexChartOptions<WeekCount> _options = UiTheme.ChartOptions<WeekCount>(false);
+
+    public record WeekCount(DateOnly Week, decimal? Count);
+
+    protected override async Task LoadAsync(CancellationToken ct)
+    {
+        _result = await Report.RunAsync(Filter, Settings, ct);
+        _weeks = _result.ActivitiesPerWeek.Select(w => new WeekCount(w.Week, w.Count)).ToList();
+    }
+
+    protected override void BuildCharts() => _options = UiTheme.ChartOptions<WeekCount>(Dark, "Activities");
+
+    private static string HeatClass(DayCount d, int max)
+    {
+        if (d.Count == 0) return "heat-0";
+        var f = d.MovingTimeS / (double)max;
+        return f < .25 ? "heat-1" : f < .5 ? "heat-2" : f < .75 ? "heat-3" : "heat-4";
+    }
+}

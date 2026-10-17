@@ -1,0 +1,145 @@
+@inject FilterState FilterState
+@inject AppSettingsService SettingsService
+@inject ActivityQueries Queries
+@inject IServiceProvider Services
+
+<div class="filter-bar">
+    @if (ShowDates)
+    {
+        <div class="field">
+            <label for="f-range">Date range</label>
+            <select id="f-range" value="@FilterState.Preset" @onchange="OnPreset">
+                @foreach (var (key, label) in FilterState.Presets)
+                {
+                    <option value="@key">@label</option>
+                }
+            </select>
+        </div>
+        @if (FilterState.Preset == "custom")
+        {
+            <div class="field">
+                <label for="f-from">From</label>
+                <input id="f-from" type="date" value="@_filter.From?.ToString("yyyy-MM-dd")" @onchange="e => SetDate(e, true)" />
+            </div>
+            <div class="field">
+                <label for="f-to">To</label>
+                <input id="f-to" type="date" value="@_filter.To?.ToString("yyyy-MM-dd")" @onchange="e => SetDate(e, false)" />
+            </div>
+        }
+    }
+
+    @if (ShowSport)
+    {
+        <div class="field">
+            <label for="f-sport">Sport</label>
+            <select id="f-sport" value="@SportValue" @onchange="OnSport">
+                <option value="All">All sports</option>
+                <option value="Run">Running (all)</option>
+                <option value="Ride">Cycling (all)</option>
+                <option value="Other">Other sports</option>
+                @foreach (var t in _sportTypes)
+                {
+                    <option value="@($"type:{t}")">@t</option>
+                }
+            </select>
+        </div>
+    }
+
+    <div class="field">
+        <label for="f-gear">Gear</label>
+        <select id="f-gear" value="@(_filter.GearId ?? "")" @onchange="OnGear">
+            <option value="">All gear</option>
+            @foreach (var g in _gear)
+            {
+                <option value="@g.StravaId">@g.Name@(g.IsRetired ? " (retired)" : "")</option>
+            }
+            @foreach (var n in _archiveGear)
+            {
+                <option value="@(ArchiveRowSource.NamePrefix + n)">@n (archive)</option>
+            }
+        </select>
+    </div>
+
+    <div class="checks">
+        <label class="check"><input type="checkbox" checked="@_filter.IncludeTrainer" @onchange="e => Update(_filter with { IncludeTrainer = (bool)e.Value! })" /> Trainer</label>
+        <label class="check"><input type="checkbox" checked="@_filter.IncludeCommute" @onchange="e => Update(_filter with { IncludeCommute = (bool)e.Value! })" /> Commute</label>
+        @if (_archiveCount > 0)
+        {
+            <label class="check" title="Add activities that exist only in the export archive (@_archiveCount.ToString("N0") archived)">
+                <input type="checkbox" checked="@_filter.IncludeArchive" @onchange="e => Update(_filter with { IncludeArchive = (bool)e.Value! })" /> Archive
+            </label>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool ShowDates { get; set; } = true;
+    [Parameter] public bool ShowSport { get; set; } = true;
+
+    private ReportFilter _filter = new();
+    private AppSettingsModel _settings = new();
+    private List<Gear> _gear = [];
+    private List<string> _sportTypes = [];
+    private int _archiveCount;
+    private List<string> _archiveGear = [];
+
+    private string SportValue => _filter.SportType is { } t ? $"type:{t}" : _filter.Group.ToString();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await SettingsService.GetAsync();
+        _filter = FilterState.Get(_settings);
+        _gear = await Queries.GearAsync();
+        _sportTypes = await Queries.SportTypesAsync();
+        if (Services.GetService<ArchiveRowSource>() is { } archive)
+        {
+            _archiveCount = await archive.CountAsync();
+            if (_archiveCount > 0) _archiveGear = await archive.GearNamesAsync();
+        }
+        if (_archiveCount > 0 && !FilterState.ArchiveDefaultApplied)
+        {
+            FilterState.ArchiveDefaultApplied = true;
+            Update(_filter with { IncludeArchive = true });
+        }
+    }
+
+    private void Update(ReportFilter f, string? preset = null)
+    {
+        _filter = f;
+        FilterState.Set(f, preset);
+    }
+
+    private void OnPreset(ChangeEventArgs e)
+    {
+        var key = e.Value?.ToString() ?? "12m";
+        if (key == "custom") { Update(_filter, "custom"); return; }
+        var (from, to) = FilterState.PresetRange(key, _settings.WeekStart);
+        Update(_filter with { From = from, To = to }, key);
+    }
+
+    private void SetDate(ChangeEventArgs e, bool isFrom)
+    {
+        DateOnly? d = DateOnly.TryParse(e.Value?.ToString(), out var v) ? v : null;
+        Update(isFrom ? _filter with { From = d } : _filter with { To = d }, "custom");
+    }
+
+    private void OnSport(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString() ?? "All";
+        if (v.StartsWith("type:"))
+        {
+            var t = v[5..];
+            Update(_filter with { Group = SportGroups.Classify(t), SportType = t });
+        }
+        else
+        {
+            Update(_filter with { Group = Enum.Parse<SportGroup>(v), SportType = null });
+        }
+    }
+
+    private void OnGear(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString();
+        Update(_filter with { GearId = string.IsNullOrEmpty(v) ? null : v });
+    }
+}

@@ -1,0 +1,269 @@
+@page "/archive"
+@implements IDisposable
+@inject ArchiveService Archive
+@inject AppSettingsService SettingsService
+
+<PageTitle>Archive · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Export archive</h1>
+        <p class="muted">Activities loaded from Strava's "Download your data" export, kept in a separate database. Loading a file again adds new activities and updates changed ones without duplicating any.</p>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Import a file</h2>
+    <p class="muted small">
+        On strava.com go to Settings → My Account → Download or Delete Your Account → Request your archive. Strava emails a .zip.
+        Choose the whole .zip, or just <code>activities.csv</code> from inside it, which is much smaller to upload.
+    </p>
+    <div class="btn-row" style="align-items:center">
+        <InputFile OnChange="OnFileAsync" accept=".csv,.zip" disabled="@_importing" />
+        @if (_importing) { <span class="muted">@(_progress is { } p ? Describe(p) : "Starting…")</span> }
+    </div>
+    @if (_last is { } last)
+    {
+        <div class="alert @(last.Success ? "ok" : "danger")" style="margin-top:.75rem">
+            <strong>@last.Batch.FileName</strong>: @(last.Success
+                ? $"{last.Batch.RowsRead:N0} rows read — {last.Batch.Inserted:N0} new, {last.Batch.Updated:N0} updated, {last.Batch.Unchanged:N0} unchanged" +
+                  (last.Batch.Skipped > 0 ? $", {last.Batch.Skipped:N0} skipped (no activity ID)" : "") +
+                  (last.Batch.DuplicatesInFile > 0 ? $", {last.Batch.DuplicatesInFile:N0} repeated in the file" : "") + "."
+                : last.Batch.Message)
+        </div>
+    }
+</div>
+
+@if (_summary is { Activities: > 0 } s)
+{
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Activities</div><div class="value">@s.Activities.ToString("N0")</div><div class="sub">@s.First?.ToString("MMM yyyy") – @s.Last?.ToString("MMM yyyy")</div></div>
+        <div class="card stat"><div class="label">Distance</div><div class="value">@Units.FormatDistance(s.DistanceM, _u, 0)</div><div class="sub">@Units.FormatDuration(s.MovingTimeS) moving</div></div>
+        <div class="card stat"><div class="label">Also synced</div><div class="value">@s.AlsoSynced.ToString("N0")</div><div class="sub">in the Strava API database</div></div>
+        <div class="card stat"><div class="label">Archive only</div><div class="value">@s.OnlyInArchive.ToString("N0")</div><div class="sub">@s.SyncedNotInArchive.ToString("N0") synced but not in the archive</div></div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>By year</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Year</th><th class="r">Activities</th><th class="r">Runs</th><th class="r">Rides</th><th class="r">Distance</th><th class="r">Time</th><th class="r">Elev.</th></tr></thead>
+                    <tbody>
+                        @foreach (var y in s.Years)
+                        {
+                            <tr>
+                                <td><a href="archive" @onclick="() => SetYearAsync(y.Year)" @onclick:preventDefault>@y.Year</a></td>
+                                <td class="r">@y.Count</td>
+                                <td class="r">@y.Runs</td>
+                                <td class="r">@y.Rides</td>
+                                <td class="r">@Units.FormatDistance(y.DistanceM, _u, 0)</td>
+                                <td class="r">@Units.FormatDuration(y.MovingTimeS)</td>
+                                <td class="r">@Units.FormatElevation(y.ElevationGainM, _u)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card">
+            <h2>Import history</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>#</th><th>When</th><th>File</th><th>Result</th></tr></thead>
+                    <tbody>
+                        @foreach (var b in _batches)
+                        {
+                            <tr>
+                                <td>@b.Id</td>
+                                <td class="num">@b.StartedUtc.ToLocalTime().ToString("d MMM yyyy HH:mm")</td>
+                                <td>@b.FileName</td>
+                                <td><span class="badge @(b.Status == "Completed" ? "ok" : b.Status == "Running" ? "accent" : "danger")">@b.Status</span> <span class="small muted">@b.Message</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Archived activities</h2>
+        <div class="filter-bar">
+            <div class="field"><label for="a-search">Search</label><input id="a-search" type="text" placeholder="Name or activity ID" value="@_search" @onchange="e => SetSearchAsync(e.Value?.ToString())" /></div>
+            <div class="field">
+                <label for="a-type">Type</label>
+                <select id="a-type" value="@(_type ?? "")" @onchange="e => SetTypeAsync(e.Value?.ToString())">
+                    <option value="">All types</option>
+                    @foreach (var t in _types) { <option value="@t">@t</option> }
+                </select>
+            </div>
+            <div class="field">
+                <label for="a-year">Year</label>
+                <select id="a-year" value="@(_year?.ToString() ?? "")" @onchange="e => SetYearAsync(int.TryParse(e.Value?.ToString(), out var y) ? y : null)">
+                    <option value="">All years</option>
+                    @foreach (var y in s.Years) { <option value="@y.Year">@y.Year</option> }
+                </select>
+            </div>
+        </div>
+        <div class="table-wrap">
+            <table class="data">
+                <thead><tr><th>Date (UTC)</th><th>Name</th><th>Type</th><th class="r">Distance</th><th class="r">Moving</th><th class="r">Elev.</th><th class="r">HR</th><th>Gear</th></tr></thead>
+                <tbody>
+                    @foreach (var a in _rows)
+                    {
+                        <tr style="cursor:pointer" @onclick="() => ToggleAsync(a.ActivityId)">
+                            <td class="num">@a.StartDateUtc?.ToString("ddd d MMM yyyy")</td>
+                            <td>@a.Name</td>
+                            <td>@a.ActivityType</td>
+                            <td class="r">@(a.DistanceM is { } d ? Units.FormatDistance(d, _u, 2) : "–")</td>
+                            <td class="r">@(a.MovingTimeS is { } t ? Units.FormatClock(t) : "–")</td>
+                            <td class="r">@(a.ElevationGainM is { } e ? Units.FormatElevation(e, _u) : "–")</td>
+                            <td class="r">@(a.AvgHr?.ToString("0") ?? "–")</td>
+                            <td>@a.GearName</td>
+                        </tr>
+                        @if (_open == a.ActivityId)
+                        {
+                            <tr>
+                                <td colspan="8">
+                                    <div class="raw-fields">
+                                        <a href="@($"https://www.strava.com/activities/{a.ActivityId}")" target="_blank" rel="noopener">View on Strava</a>
+                                        <span class="muted small">· first imported in batch #@a.FirstBatchId, last changed in #@a.LastBatchId</span>
+                                        <dl class="stat-rows">
+                                            @foreach (var (k, v) in _raw) { <dt>@k</dt><dd>@v</dd> }
+                                        </dl>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="btn-row" style="margin-top:.75rem;align-items:center">
+            <button class="btn" disabled="@(_page == 0)" @onclick="() => PageAsync(-1)">Previous</button>
+            <span class="muted small">@(_total == 0 ? "No matches" : $"{_page * PageSize + 1:N0}–{Math.Min(_total, (_page + 1) * PageSize):N0} of {_total:N0}")</span>
+            <button class="btn" disabled="@((_page + 1) * PageSize >= _total)" @onclick="() => PageAsync(1)">Next</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Empty the archive</h2>
+        <p class="muted small">Deletes every archived activity and the import history. The synced Strava data is not touched.</p>
+        @if (_confirm)
+        {
+            <div class="btn-row" style="align-items:center">
+                <input type="text" placeholder="Type DELETE" @bind="_confirmText" @bind:event="oninput" style="max-width:160px" />
+                <button class="btn btn-danger" disabled="@(_confirmText != "DELETE")" @onclick="DeleteAsync">Delete archive</button>
+                <button class="btn" @onclick="CancelDelete">Cancel</button>
+            </div>
+        }
+        else { <button class="btn btn-danger" @onclick="() => _confirm = true">Delete archive…</button> }
+    </div>
+}
+else if (_summary is not null)
+{
+    <div class="card empty"><h2>The archive is empty</h2><p>Import activities.csv or the export .zip above.</p></div>
+}
+else { <div class="loading">Loading…</div> }
+
+@code {
+    private const int PageSize = 50;
+    /// <summary>The full export .zip includes every original file; allow large uploads.</summary>
+    private const long MaxUploadBytes = 4L * 1024 * 1024 * 1024;
+
+    private ArchiveSummary? _summary;
+    private List<ImportBatch> _batches = [];
+    private List<ArchiveRow> _rows = [];
+    private List<string> _types = [];
+    private IReadOnlyList<KeyValuePair<string, string>> _raw = [];
+    private int _total, _page;
+    private string? _search, _type;
+    private int? _year;
+    private long? _open;
+    private UnitSystem _u;
+    private bool _importing, _confirm;
+    private string _confirmText = "";
+    private ImportProgress? _progress;
+    private ImportResult? _last;
+
+    /// <summary>Opens the page searching for this name or activity ID (links from reports).</summary>
+    [SupplyParameterFromQuery(Name = "q")] public string? Query { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _u = (await SettingsService.GetAsync()).Units;
+        _search = Query;
+        Archive.Changed += OnChanged;
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        _summary = await Archive.SummaryAsync();
+        _batches = await Archive.BatchesAsync();
+        _types = await Archive.SportTypesAsync();
+        await LoadRowsAsync();
+    }
+
+    private async Task LoadRowsAsync()
+    {
+        (_rows, _total) = await Archive.ListAsync(_search, _type, _year, _page * PageSize, PageSize);
+    }
+
+    private async Task OnFileAsync(InputFileChangeEventArgs e)
+    {
+        _importing = true;
+        _last = null;
+        _progress = new ImportProgress("Uploading", 0, 0);
+        StateHasChanged();
+        try
+        {
+            var progress = new Progress<ImportProgress>(p => { _progress = p; InvokeAsync(StateHasChanged); });
+            await using var stream = e.File.OpenReadStream(MaxUploadBytes);
+            _last = await Archive.ImportAsync(stream, e.File.Name, progress);
+        }
+        catch (IOException ex)
+        {
+            _last = new ImportResult(false, new ImportBatch { FileName = e.File.Name, Message = ex.Message });
+        }
+        finally
+        {
+            _importing = false;
+            _progress = null;
+        }
+        _page = 0;
+        await RefreshAsync();
+    }
+
+    private static string Describe(ImportProgress p) => p.Total > 0 ? $"{p.Stage}… {p.Done:N0} of {p.Total:N0}" : $"{p.Stage}…";
+
+    private async Task SetSearchAsync(string? v) { _search = v; _page = 0; await LoadRowsAsync(); }
+    private async Task SetTypeAsync(string? v) { _type = string.IsNullOrEmpty(v) ? null : v; _page = 0; await LoadRowsAsync(); }
+    private async Task SetYearAsync(int? y) { _year = y; _page = 0; await LoadRowsAsync(); }
+    private async Task PageAsync(int delta) { _page = Math.Max(0, _page + delta); await LoadRowsAsync(); }
+
+    private async Task ToggleAsync(long id)
+    {
+        if (_open == id) { _open = null; return; }
+        _open = id;
+        _raw = await Archive.RawAsync(id);
+    }
+
+    private void CancelDelete() { _confirm = false; _confirmText = ""; }
+
+    private async Task DeleteAsync()
+    {
+        await Archive.DeleteAllAsync();
+        CancelDelete();
+        _last = null;
+        await RefreshAsync();
+    }
+
+    private void OnChanged()
+    {
+        if (!_importing) InvokeAsync(async () => { await RefreshAsync(); StateHasChanged(); });
+    }
+
+    public void Dispose() => Archive.Changed -= OnChanged;
+}

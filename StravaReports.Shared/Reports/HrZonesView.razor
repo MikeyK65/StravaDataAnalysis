@@ -1,0 +1,88 @@
+@inherits ReportViewBase
+@inject HrZonesReport Report
+
+<FilterBar />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Zones: null })
+{
+    <div class="card empty"><h2>Heart-rate zones need a max HR</h2><p>Set your max heart rate or custom zones in <a href="settings">Settings</a>. No activity with heart rate was found to estimate one.</p></div>
+}
+else if (_result is { Zones: { } zones } r && r.TotalSeconds.Sum() > 0)
+{
+    var total = r.TotalSeconds.Sum();
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Time in zone</h2>
+            <p class="muted small">Zones: @zones.Source.</p>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Zone</th><th class="r">bpm</th><th class="r">Time</th><th class="r">Share</th><th style="width:35%"></th></tr></thead>
+                    <tbody>
+                        @for (var z = 0; z < 5; z++)
+                        {
+                            <tr>
+                                <td><span class="zone-dot" style="background:@ZoneColors[z]"></span>@HrZoneSet.Names[z]</td>
+                                <td class="r">@zones.Range(z)</td>
+                                <td class="r">@Units.FormatDuration((int)r.TotalSeconds[z])</td>
+                                <td class="r">@((r.TotalSeconds[z] / total).ToString("P0"))</td>
+                                <td><div class="meter"><span style="width:@((r.TotalSeconds[z] / total * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%;background:@ZoneColors[z]"></span></div></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card">
+            <h2>Coverage</h2>
+            <dl class="stat-rows">
+                <dt>From heart-rate streams</dt><dd>@r.FromStreams</dd>
+                <dt>Estimated from average HR</dt><dd>@r.Estimated</dd>
+                <dt>No heart rate</dt><dd>@r.WithoutHr</dd>
+                <dt>Total time with HR</dt><dd>@Units.FormatDuration((int)total)</dd>
+            </dl>
+            <p class="muted small" style="margin-top:.75rem">Stream-based zone times are scaled so they add up to each activity's moving time. Activities without a stream put their whole moving time in the zone of their average HR. Turn on "Fetch streams" in Settings for exact zones.</p>
+            @foreach (var g in r.BySport)
+            {
+                var gt = g.Seconds.Sum();
+                <div class="zone-bar" title="@g.Group">
+                    <span class="label">@g.Group</span>
+                    <div class="stack">
+                        @for (var z = 0; z < 5; z++)
+                        {
+                            <span style="width:@((gt > 0 ? g.Seconds[z] / gt * 100 : 0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%;background:@ZoneColors[z]" title="@HrZoneSet.Names[z]: @Units.FormatDuration((int)g.Seconds[z])"></span>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Weekly time in zone</h2>
+        <ApexChart @key="@($"w{Version}")" TItem="ZoneWeek" Options="_weekly" Height="300">
+            @for (var z = 0; z < 5; z++)
+            {
+                var zone = z;
+                <ApexPointSeries TItem="ZoneWeek" Items="r.Weeks" Name="@HrZoneSet.Names[zone]" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => (decimal)Math.Round(w.Seconds[zone] / 3600, 2))" />
+            }
+        </ApexChart>
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No heart-rate data</h2><p>No activities with heart rate match the filter.</p></div> }
+
+@code {
+    public static readonly string[] ZoneColors = ["#7A8699", "#2D7FF9", "#14A38B", "#E8A33D", "#E5484D"];
+    private HrZonesResult? _result;
+    private ApexChartOptions<ZoneWeek> _weekly = UiTheme.ChartOptions<ZoneWeek>(false, stacked: true);
+
+    protected override async Task LoadAsync(CancellationToken ct) => _result = await Report.RunAsync(Filter, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _weekly = UiTheme.ChartOptions<ZoneWeek>(Dark, "hours", stacked: true);
+        _weekly.Colors = [.. ZoneColors];
+    }
+}

@@ -1,0 +1,215 @@
+@page "/activities/{StravaId:long}"
+@inject ActivityQueries Queries
+@inject AppSettingsService SettingsService
+@inject ActivityAnalysis Analysis
+@inject ActivityRoutes Routes
+@inject UiTheme Theme
+
+<PageTitle>@(_a?.Name ?? "Activity") · Strava Reports</PageTitle>
+
+@if (_a is { } a)
+{
+    var run = SportGroups.Classify(a.SportType) == SportGroup.Run;
+    <div class="page-head">
+        <div>
+            <h1>@a.Name</h1>
+            <p class="muted">@a.SportType · @a.StartDateLocal.ToString("dddd d MMMM yyyy, HH:mm")
+                @if (a.IsTrainer) { <span class="badge">trainer</span> }
+                @if (a.IsCommute) { <span class="badge">commute</span> }
+                @if (a.IsManual) { <span class="badge">manual</span> }
+            </p>
+        </div>
+        <a class="btn" href="@($"https://www.strava.com/activities/{a.StravaId}")" target="_blank" rel="noopener">View on Strava</a>
+    </div>
+
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Distance</div><div class="value">@Units.FormatDistance(a.DistanceM, _u, 2)</div></div>
+        <div class="card stat"><div class="label">Moving time</div><div class="value">@Units.FormatClock(a.MovingTimeS)</div><div class="sub">elapsed @Units.FormatClock(a.ElapsedTimeS)</div></div>
+        <div class="card stat"><div class="label">@(run ? "Pace" : "Avg speed")</div>
+            <div class="value">@(run ? Units.FormatPace(Calc.PaceSecondsPerUnit(a.DistanceM, a.MovingTimeS, _u), _u) : Units.FormatSpeed(a.AvgSpeed, _u))</div>
+            <div class="sub">max @Units.FormatSpeed(a.MaxSpeed, _u)</div></div>
+        <div class="card stat"><div class="label">Elevation</div><div class="value">@Units.FormatElevation(a.ElevationGainM, _u)</div></div>
+    </div>
+
+    <div class="card">
+        <h2>Metrics</h2>
+        <dl class="stat-rows" style="max-width:420px">
+            <dt>Average heart rate</dt><dd>@(a.AvgHr?.ToString("0") ?? "–") bpm</dd>
+            <dt>Max heart rate</dt><dd>@(a.MaxHr?.ToString("0") ?? "–") bpm</dd>
+            <dt>Average cadence</dt><dd>@(a.AvgCadence?.ToString("0") ?? "–")</dd>
+            <dt>Average power</dt><dd>@(a.AvgWatts?.ToString("0") ?? "–") W</dd>
+            <dt>Weighted avg power</dt><dd>@(a.WeightedAvgWatts?.ToString("0") ?? "–") W</dd>
+            <dt>Energy</dt><dd>@(a.Kilojoules?.ToString("N0") ?? "–") kJ</dd>
+            <dt>Detail fetched</dt><dd>@(a.DetailFetchedAtUtc?.ToLocalTime().ToString("d MMM yyyy HH:mm") ?? "not yet")</dd>
+        </dl>
+    </div>
+
+    @if (_route.Count > 1)
+    {
+        <div class="card">
+            <h2>Route</h2>
+            <RouteMap Lines="[new RouteMap.RouteLine(_route)]" Height="420" ShowTiles="_tiles" TileUrl="@_tileUrl" Label="@($"Route of {a.Name}")" />
+        </div>
+    }
+
+    @if (_charts is { } c)
+    {
+        var xTitle = c.XIsDistance ? Units.DistanceUnit(_u) : "minutes";
+        Func<double, double> x = c.XIsDistance ? m => Units.DistanceValue(m, _u) : s => s / 60;
+        <div class="card">
+            <h2>Streams</h2>
+            <StreamChart Key="@($"alt{_v}")" Title="Elevation" Points="c.Altitude" YValue="@(m => Units.ElevationValue(m, _u))" XValue="x" XTitle="@xTitle"
+                         YTitle="@Units.ElevationUnit(_u)" Color="#7A8699" Area="true" Dark="_dark" />
+            @if (run)
+            {
+                <StreamChart Key="@($"pace{_v}")" Title="Pace" Points="PacePoints(c.Speed)" YValue="@(v => v)" XValue="x" XTitle="@xTitle"
+                             YTitle="@($"min {Units.PaceUnit(_u)}")" Color="#2D7FF9" Reversed="true" Dark="_dark" />
+            }
+            else
+            {
+                <StreamChart Key="@($"spd{_v}")" Title="Speed" Points="c.Speed" YValue="@(v => Units.SpeedValue(v, _u))" XValue="x" XTitle="@xTitle"
+                             YTitle="@Units.SpeedUnit(_u)" Color="#2D7FF9" Dark="_dark" />
+            }
+            <StreamChart Key="@($"hr{_v}")" Title="Heart rate" Points="c.HeartRate" XValue="x" XTitle="@xTitle" YTitle="bpm" Color="#E5484D" Dark="_dark"
+                         Summary="@(a.AvgHr is { } ahr ? $"avg {ahr:0} · max {a.MaxHr:0} bpm" : null)" />
+            <StreamChart Key="@($"w{_v}")" Title="Power" Points="c.Watts" XValue="x" XTitle="@xTitle" YTitle="W" Color="#FC4C02" Dark="_dark"
+                         Summary="@(c.NormalizedPower is { } np ? $"avg {a.AvgWatts:0} · normalised {np:0} W" : null)" />
+            <StreamChart Key="@($"cad{_v}")" Title="Cadence" Points="c.Cadence" YValue="@(v => run ? v * 2 : v)" XValue="x" XTitle="@xTitle"
+                         YTitle="@(run ? "spm" : "rpm")" Color="#A35BEB" Dark="_dark" />
+        </div>
+
+        @if (c.ZoneSeconds is not null || c.PowerPeaks.Count > 0)
+        {
+            <div class="grid grid-2">
+                <div class="card">
+                    <h2>Heart-rate zones</h2>
+                    @if (c.ZoneSeconds is { } zsec && c.Zones is { } zset)
+                    {
+                        var total = Math.Max(1, zsec.Sum());
+                        <p class="muted small">Zones: @zset.Source. Scaled to moving time (@Units.FormatClock(a.MovingTimeS)).</p>
+                        <dl class="stat-rows">
+                            @for (var z = 0; z < 5; z++)
+                            {
+                                <dt><span class="zone-dot" style="background:@StravaReports.Shared.Reports.HrZonesView.ZoneColors[z]"></span>@HrZoneSet.Names[z] (@zset.Range(z))</dt>
+                                <dd>@Units.FormatClock((int)Math.Round(zsec[z])) · @((zsec[z] / total).ToString("P0"))</dd>
+                            }
+                        </dl>
+                    }
+                    else { <p class="muted">No heart-rate stream.</p> }
+                </div>
+                <div class="card">
+                    <h2>Peak power</h2>
+                    @if (c.PowerPeaks.Count > 0)
+                    {
+                        <dl class="stat-rows">
+                            @foreach (var (sec, w) in c.PowerPeaks.OrderBy(p => p.Key))
+                            {
+                                <dt>@StravaReports.Shared.Reports.PowerView.DurationLabel(sec)</dt>
+                                <dd>@w.ToString("0") W@(_ftp is { } f ? $" · {w / f:P0} FTP" : "")</dd>
+                            }
+                        </dl>
+                    }
+                    else { <p class="muted">No power stream.</p> }
+                </div>
+            </div>
+        }
+    }
+    else if (a.StreamsFetchedAtUtc is null && !a.IsManual)
+    {
+        <div class="alert">Streams for this activity have not been downloaded. Turn on "Fetch streams" in <a href="settings">Settings</a> to see charts, zones and peak power.</div>
+    }
+
+    @if (a.Laps.Count > 0)
+    {
+        <div class="card">
+            <h2>Laps</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>#</th><th class="r">Distance</th><th class="r">Time</th><th class="r">@(run ? "Pace" : "Speed")</th><th class="r">Elev.</th><th class="r">HR</th><th class="r">Power</th></tr></thead>
+                    <tbody>
+                        @foreach (var l in a.Laps.OrderBy(l => l.LapIndex))
+                        {
+                            <tr>
+                                <td>@l.LapIndex</td>
+                                <td class="r">@Units.FormatDistance(l.DistanceM, _u, 2)</td>
+                                <td class="r">@Units.FormatClock(l.MovingTimeS)</td>
+                                <td class="r">@(run ? Units.FormatPace(Calc.PaceSecondsPerUnit(l.DistanceM, l.MovingTimeS, _u), _u) : Units.FormatSpeed(l.AvgSpeed, _u))</td>
+                                <td class="r">@Units.FormatElevation(l.ElevationGainM, _u)</td>
+                                <td class="r">@(l.AvgHr?.ToString("0") ?? "–")</td>
+                                <td class="r">@(l.AvgWatts?.ToString("0") ?? "–")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (a.BestEfforts.Count > 0)
+    {
+        <div class="card">
+            <h2>Best efforts</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Effort</th><th class="r">Time</th><th class="r">Pace</th><th>PR</th></tr></thead>
+                    <tbody>
+                        @foreach (var b in a.BestEfforts.OrderBy(b => b.DistanceM))
+                        {
+                            <tr>
+                                <td>@b.Name</td>
+                                <td class="r">@Units.FormatClock(b.MovingTimeS)</td>
+                                <td class="r">@Units.FormatPace(Calc.PaceSecondsPerUnit(b.DistanceM, b.MovingTimeS, _u), _u)</td>
+                                <td>@(b.PrRank is { } pr ? $"#{pr}" : "")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+else if (_loaded)
+{
+    <div class="card empty"><h2>Activity not found</h2><p>It may not have synced yet, or it was deleted on Strava.</p><a href="activities">Back to activities</a></div>
+}
+else { <div class="loading">Loading…</div> }
+
+@code {
+    [Parameter] public long StravaId { get; set; }
+    private Activity? _a;
+    private UnitSystem _u;
+    private bool _loaded;
+    private ActivityStreamCharts? _charts;
+    private bool _dark;
+    private int _v;
+    private int? _ftp;
+    private IReadOnlyList<LatLng> _route = [];
+    private bool _tiles;
+    private string _tileUrl = StravaDefaults.MapTileUrl;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var settings = await SettingsService.GetAsync();
+        _u = settings.Units;
+        _ftp = settings.Ftp;
+        _a = await Queries.GetWithLapsAsync(StravaId);
+        _charts = _a is null ? null : await Analysis.ChartsAsync(_a, settings);
+        _route = _a is null ? [] : await Routes.RouteAsync(_a);
+        (_tiles, _tileUrl) = (settings.MapTiles, settings.MapTileUrl);
+        _loaded = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        var dark = await Theme.IsDarkAsync();
+        if (dark != _dark) { _dark = dark; _v++; StateHasChanged(); }
+    }
+
+    /// <summary>Speed (m/s) to pace in minutes per unit; near-stopped points are dropped so the axis stays readable.</summary>
+    private IReadOnlyList<SeriesPoint> PacePoints(IReadOnlyList<SeriesPoint> speed)
+    {
+        var metresPerUnit = 1 / Units.DistanceValue(1, _u);
+        return speed.Select(p => p with { Y = p.Y is > 0.5 ? metresPerUnit / p.Y.Value / 60 : null }).ToList();
+    }
+}

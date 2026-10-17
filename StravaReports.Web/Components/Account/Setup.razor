@@ -1,0 +1,77 @@
+@page "/account/setup"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject WebAccountService Accounts
+@inject WebDataPaths Paths
+@inject NavigationManager Nav
+
+<PageTitle>Set up · Strava Reports</PageTitle>
+
+<h1 style="font-size:1.3rem">Create your password</h1>
+<p class="small muted">This site is single-user. To prove you own the server, enter the one-time setup code from
+    <code style="word-break:break-all">@Paths.SetupCode</code>.</p>
+
+@if (_error is not null)
+{
+    <div class="alert danger small">@_error</div>
+}
+
+<form method="post" @formname="setup" @onsubmit="SetupAsync">
+    <AntiforgeryToken />
+    <div class="field">
+        <label for="code">Setup code</label>
+        <input id="code" name="Input.Code" type="text" autocomplete="off" required />
+    </div>
+    <div class="field" style="margin-top:.75rem">
+        <label for="pw">New password</label>
+        <input id="pw" name="Input.Password" type="password" autocomplete="new-password" minlength="12" required />
+        <span class="hint">At least 12 characters.</span>
+    </div>
+    <div class="field" style="margin-top:.75rem">
+        <label for="pw2">Confirm password</label>
+        <input id="pw2" name="Input.Confirm" type="password" autocomplete="new-password" required />
+    </div>
+    <button type="submit" class="btn btn-primary" style="width:100%; margin-top:1rem">Create password</button>
+</form>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm] private InputModel? Input { get; set; }
+
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Input ??= new();
+        if (await Accounts.HasPasswordAsync())
+            Nav.NavigateTo("account/login");
+        else if (HttpMethods.IsGet(HttpContext.Request.Method))
+            await Accounts.EnsureSetupCodeAsync();
+    }
+
+    private async Task SetupAsync()
+    {
+        if (await Accounts.HasPasswordAsync()) { Nav.NavigateTo("account/login"); return; }
+        if (Accounts.IsLockedOut()) { _error = "Too many failed attempts. Try again in 15 minutes."; return; }
+        if (!await Accounts.VerifySetupCodeAsync(Input!.Code))
+        {
+            await Accounts.VerifyPasswordAsync(""); // records a failure and applies the delay
+            _error = "That setup code is not correct.";
+            return;
+        }
+        if ((Input!.Password ?? "").Length < 12) { _error = "Use at least 12 characters."; return; }
+        if (Input!.Password != Input!.Confirm) { _error = "The passwords do not match."; return; }
+
+        await Accounts.SetPasswordAsync(Input!.Password!);
+        await HttpContext.SignInOwnerAsync();
+        Nav.NavigateTo("/settings", forceLoad: true);
+    }
+
+    private sealed class InputModel
+    {
+        public string? Code { get; set; }
+        public string? Password { get; set; }
+        public string? Confirm { get; set; }
+    }
+}

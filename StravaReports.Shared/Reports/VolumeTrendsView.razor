@@ -1,0 +1,104 @@
+@inherits ReportViewBase
+@inject VolumeTrendsReport Report
+
+<FilterBar />
+
+<div class="card">
+    <div class="card-head">
+        <h2>@MetricLabel by @_grouping.ToString().ToLowerInvariant()</h2>
+        <div class="btn-row">
+            <div class="seg">
+                @foreach (var m in new[] { "Distance", "Time", "Elevation" })
+                {
+                    <button class="@(_metric == m ? "on" : "")" @onclick="() => SetMetric(m)">@m</button>
+                }
+            </div>
+            <div class="seg">
+                @foreach (var g in Enum.GetValues<Grouping>())
+                {
+                    <button class="@(_grouping == g ? "on" : "")" @onclick="() => SetGrouping(g)">@g</button>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (Error is not null) { <div class="alert danger">@Error</div> }
+    else if (_result is { Periods.Count: > 0 } r)
+    {
+        <p class="muted small">
+            Total: @Dist(r.Total.DistanceM) · @Units.FormatDuration(r.Total.MovingTimeS) · @Elev(r.Total.ElevationGainM) · @r.Total.Count activities
+        </p>
+        <div class="chart-box">
+            <ApexChart @key="@($"{Version}-{_metric}-{_grouping}")" TItem="PeriodTotals" Options="_periodOptions" Height="320">
+                <ApexPointSeries TItem="PeriodTotals" Items="r.Periods" Name="@MetricLabel" SeriesType="SeriesType.Bar"
+                                 XValue="@(p => Label(p.PeriodStart))" YValue="@(p => Value(p.Totals))" />
+            </ApexChart>
+        </div>
+    }
+    else if (!Loading) { <div class="empty">No activities match the filter.</div> }
+</div>
+
+@if (_result is { YearOverlay.Count: > 0 } res)
+{
+    <div class="card">
+        <h2>Year on year: cumulative distance (@DU)</h2>
+        <p class="muted small">Ignores the date range so each year is shown in full.</p>
+        <div class="chart-box">
+            <ApexChart @key="@($"yoy-{Version}")" TItem="WeekPoint" Options="_yoyOptions" Height="320" XAxisType="XAxisType.Numeric">
+                @foreach (var y in res.YearOverlay)
+                {
+                    <ApexPointSeries TItem="WeekPoint" Items="Points(y)" Name="@y.Year.ToString()" SeriesType="SeriesType.Line"
+                                     XValue="@(p => p.Week)" YValue="@(p => p.Value)" />
+                }
+            </ApexChart>
+        </div>
+    </div>
+}
+
+@code {
+    private VolumeTrendsResult? _result;
+    private Grouping _grouping = Grouping.Week;
+    private string _metric = "Distance";
+    private ApexChartOptions<PeriodTotals> _periodOptions = UiTheme.ChartOptions<PeriodTotals>(false);
+    private ApexChartOptions<WeekPoint> _yoyOptions = UiTheme.ChartOptions<WeekPoint>(false);
+
+    public record WeekPoint(int Week, decimal? Value);
+
+    protected override async Task LoadAsync(CancellationToken ct) =>
+        _result = await Report.RunAsync(Filter, _grouping, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _periodOptions = UiTheme.ChartOptions<PeriodTotals>(Dark, MetricLabel);
+        _yoyOptions = UiTheme.ChartOptions<WeekPoint>(Dark, DU);
+        _yoyOptions.Xaxis = new XAxis { Title = new AxisTitle { Text = "Week of year" }, TickAmount = 13 };
+    }
+
+    private string MetricLabel => _metric switch
+    {
+        "Time" => "Moving time (h)",
+        "Elevation" => $"Elevation ({Units.ElevationUnit(U)})",
+        _ => $"Distance ({DU})",
+    };
+
+    private decimal? Value(Totals t) => _metric switch
+    {
+        "Time" => (decimal)Math.Round(t.MovingTimeS / 3600.0, 1),
+        "Elevation" => ElevVal(t.ElevationGainM),
+        _ => DistVal(t.DistanceM),
+    };
+
+    private string Label(DateOnly d) => _grouping switch
+    {
+        Grouping.Week => d.ToString("d MMM yy"),
+        Grouping.Month => d.ToString("MMM yy"),
+        _ => d.Year.ToString(),
+    };
+
+    private List<WeekPoint> Points(YearSeries y) =>
+        y.CumulativeDistanceByWeek.Select((v, i) => new WeekPoint(i + 1, DistVal(v))).ToList();
+
+    private void SetMetric(string m) { _metric = m; BuildCharts(); }
+
+    private async Task SetGrouping(Grouping g) { _grouping = g; await ReloadAsync(); }
+}

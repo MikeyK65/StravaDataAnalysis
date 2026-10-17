@@ -1,0 +1,63 @@
+@page "/account/login"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject WebAccountService Accounts
+@inject NavigationManager Nav
+
+<PageTitle>Sign in · Strava Reports</PageTitle>
+
+<h1 style="font-size:1.3rem">Sign in</h1>
+
+@if (_error is not null)
+{
+    <div class="alert danger small">@_error</div>
+}
+
+<form method="post" @formname="login" @onsubmit="SignInAsync">
+    <AntiforgeryToken />
+    <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="Input.Password" type="password" autocomplete="current-password" autofocus required />
+    </div>
+    <button type="submit" class="btn btn-primary" style="width:100%; margin-top:1rem">Sign in</button>
+</form>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm] private InputModel? Input { get; set; }
+    [SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Input ??= new();
+        if (HttpMethods.IsGet(HttpContext.Request.Method) && !await Accounts.HasPasswordAsync())
+            Nav.NavigateTo("account/setup");
+    }
+
+    private async Task SignInAsync()
+    {
+        if (Accounts.IsLockedOut())
+        {
+            _error = "Too many failed attempts. Try again in 15 minutes.";
+            return;
+        }
+        if (!await Accounts.VerifyPasswordAsync(Input!.Password ?? ""))
+        {
+            _error = "Incorrect password.";
+            return;
+        }
+        await HttpContext.SignInOwnerAsync();
+        Nav.NavigateTo(SafeReturnUrl(ReturnUrl), forceLoad: true);
+    }
+
+    internal static string SafeReturnUrl(string? url) =>
+        !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//") && !url.StartsWith("/\\") ? url : "/";
+
+    private sealed class InputModel
+    {
+        public string? Password { get; set; }
+    }
+}

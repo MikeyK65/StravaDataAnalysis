@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="StravaReports.Core/StravaReports.Core.csproj" />
+  <Project Path="StravaReports.Maui/StravaReports.Maui.csproj" />
+  <Project Path="StravaReports.Shared/StravaReports.Shared.csproj" />
+  <Project Path="StravaReports.Tests/StravaReports.Tests.csproj" />
+  <Project Path="StravaReports.Web/StravaReports.Web.csproj" />
+</Solution>

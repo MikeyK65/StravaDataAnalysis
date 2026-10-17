@@ -1,0 +1,109 @@
+@page "/"
+@inherits ReportViewBase
+@inject DashboardReport Report
+@inject StravaAuthService Auth
+
+<PageTitle>Dashboard · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Dashboard</h1>
+        <p class="muted">@(_athlete is null ? "Your Strava data, stored locally." : $"Welcome back, {_athlete}.")</p>
+    </div>
+</div>
+
+@if (_connection is { Connected: false })
+{
+    <div class="card empty">
+        <h2>Connect your Strava account</h2>
+        <p>Enter your Strava API application's Client ID and Client Secret in Settings, then press Connect.</p>
+        <a class="btn btn-primary" href="settings">Open Settings</a>
+    </div>
+}
+
+<FilterBar ShowDates="false" />
+
+@if (Error is not null)
+{
+    <div class="alert danger">@Error</div>
+}
+else if (_result is { } r)
+{
+    <div class="grid grid-4">
+        <TotalsCard Label="This week" Totals="r.Week" UnitsSystem="U" />
+        <TotalsCard Label="This month" Totals="r.Month" UnitsSystem="U" />
+        <TotalsCard Label="This year" Totals="r.Year" UnitsSystem="U" />
+        <div class="card stat">
+            <div class="label">Streaks</div>
+            <div class="value">@r.CurrentDailyStreak <span class="small muted">days</span></div>
+            <dl class="stat-rows">
+                <dt>Weekly streak</dt><dd>@r.CurrentWeeklyStreak wks</dd>
+                <dt>Longest daily</dt><dd>@r.LongestDailyStreak days</dd>
+                <dt>All time</dt><dd>@r.AllTime.Count.ToString("N0")</dd>
+            </dl>
+        </div>
+    </div>
+
+    <div class="grid grid-3">
+        <div class="card" style="grid-column: span 2">
+            <h2>Last 12 weeks</h2>
+            <div class="chart-box">
+                <ApexChart @key="Version" TItem="PeriodTotals" Options="_weeksOptions" Height="280">
+                    <ApexPointSeries TItem="PeriodTotals" Items="r.Last12Weeks" Name="@($"Distance ({DU})")" SeriesType="SeriesType.Bar"
+                                     XValue="@(p => p.PeriodStart.ToString("d MMM"))" YValue="@(p => DistVal(p.Totals.DistanceM))" />
+                </ApexChart>
+            </div>
+        </div>
+        <div>
+            @if (r.Latest is { } a)
+            {
+                <div class="card stat">
+                    <div class="label">Latest activity</div>
+                    <h3 style="margin:.35rem 0"><a href="@($"activities/{a.StravaId}")">@a.Name</a></h3>
+                    <div class="muted small">@a.SportType · @a.StartDateLocal.ToString("ddd d MMM yyyy, HH:mm")</div>
+                    <dl class="stat-rows">
+                        <dt>Distance</dt><dd>@Dist(a.DistanceM, 2)</dd>
+                        <dt>Moving time</dt><dd>@Units.FormatClock(a.MovingTimeS)</dd>
+                        <dt>@(SportGroups.Classify(a.SportType) == SportGroup.Run ? "Pace" : "Speed")</dt>
+                        <dd>@(SportGroups.Classify(a.SportType) == SportGroup.Run ? Pace(a.DistanceM, a.MovingTimeS) : Speed(a.AvgSpeed))</dd>
+                        <dt>Elevation</dt><dd>@Elev(a.ElevationGainM)</dd>
+                    </dl>
+                </div>
+            }
+            <div class="card" style="margin-top:1rem; padding:0; border:0; box-shadow:none; background:none">
+                <SyncStatusPanel Compact="true" />
+            </div>
+        </div>
+    </div>
+
+    @if (r.Recent.Count > 0)
+    {
+        <div class="card">
+            <div class="card-head">
+                <h2>Recent activities</h2>
+                <a href="activities">View all</a>
+            </div>
+            <ActivityTable Rows="r.Recent" UnitsSystem="U" />
+        </div>
+    }
+}
+else if (Loading)
+{
+    <div class="loading">Loading…</div>
+}
+
+@code {
+    private DashboardResult? _result;
+    private ConnectionInfo? _connection;
+    private string? _athlete;
+    private ApexChartOptions<PeriodTotals> _weeksOptions = UiTheme.ChartOptions<PeriodTotals>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct)
+    {
+        _connection = await Auth.GetConnectionAsync(ct);
+        _athlete = _connection.AthleteName;
+        _result = await Report.RunAsync(Filter, Settings, ct: ct);
+    }
+
+    protected override void BuildCharts() => _weeksOptions = UiTheme.ChartOptions<PeriodTotals>(Dark);
+}

@@ -1,0 +1,118 @@
+@inherits ReportViewBase
+@inject PowerReport Report
+
+<FilterBar ShowSport="false" />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Rides.Count: > 0 } r)
+{
+    var time = r.Rides.Sum(p => p.Ride.MovingTimeS);
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Rides with power</div><div class="value">@r.Rides.Count</div><div class="sub">@r.RidesWithoutPower without · @r.RidesWithStreams with streams</div></div>
+        <div class="card stat"><div class="label">Average power</div><div class="value">@((r.Rides.Sum(p => p.Ride.AvgWatts!.Value * p.Ride.MovingTimeS) / Math.Max(1, time)).ToString("0")) W</div><div class="sub">time-weighted</div></div>
+        <div class="card stat"><div class="label">Energy</div><div class="value">@r.Rides.Sum(p => p.Kilojoules).ToString("N0") kJ</div><div class="sub">@Units.FormatDuration(time)</div></div>
+        <div class="card stat"><div class="label">Estimated FTP</div><div class="value">@(r.CurrentFtpEstimate is { } ftp ? $"{ftp:0} W" : "–")</div>
+            <div class="sub">@(Settings.Ftp is { } set ? $"Settings: {set} W" : "set FTP in Settings for TSS")</div></div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Power curve</h2>
+            @if (r.Curve.Count > 0)
+            {
+                <p class="muted small">Best average power for each duration across the range, from power streams.</p>
+                <ApexChart @key="@($"c{Version}")" TItem="PowerCurvePoint" Options="_curve" Height="280">
+                    <ApexPointSeries TItem="PowerCurvePoint" Items="r.Curve" Name="Best power (W)" SeriesType="SeriesType.Line"
+                                     XValue="@(p => DurationLabel(p.Seconds))" YValue="@(p => (decimal)Math.Round(p.Watts))" />
+                </ApexChart>
+            }
+            else
+            {
+                <p class="muted">The power curve needs power streams. Turn on "Fetch streams" in <a href="settings">Settings</a> and let the queue run.</p>
+            }
+        </div>
+        <div class="card">
+            <h2>Estimated FTP trend</h2>
+            @if (r.FtpTrend.Count > 0)
+            {
+                <p class="muted small">Per month: 95% of the best 20-minute power, or normalised power of a ride over 55 minutes, whichever is higher.</p>
+                <ApexChart @key="@($"f{Version}")" TItem="FtpPoint" Options="_ftp" Height="260">
+                    <ApexPointSeries TItem="FtpPoint" Items="r.FtpTrend" Name="Estimated FTP (W)" SeriesType="SeriesType.Line"
+                                     XValue="@(p => p.Month.ToString("MMM yy"))" YValue="@(p => (decimal)Math.Round(p.EstimatedFtp))" />
+                </ApexChart>
+            }
+            else { <p class="muted">Not enough power data to estimate FTP.</p> }
+        </div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Kilojoules per week</h2>
+            <ApexChart @key="@($"k{Version}")" TItem="PeriodValue" Options="_kj" Height="260">
+                <ApexPointSeries TItem="PeriodValue" Items="r.WeeklyKj" Name="kJ" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Period.ToString("d MMM yy"))" YValue="@(w => (decimal)Math.Round(w.Value))" />
+            </ApexChart>
+        </div>
+        <div class="card">
+            <h2>Average and normalised power per ride</h2>
+            <ApexChart @key="@($"p{Version}")" TItem="PowerRide" Options="_rides" Height="260" XAxisType="XAxisType.Datetime">
+                <ApexPointSeries TItem="PowerRide" Items="r.Rides" Name="Average" SeriesType="SeriesType.Scatter"
+                                 XValue="@(p => p.Ride.StartDateLocal)" YValue="@(p => (decimal)Math.Round(p.Ride.AvgWatts ?? 0))" />
+                <ApexPointSeries TItem="PowerRide" Items="r.Rides.Where(p => p.NormalizedPower is not null)" Name="Normalised" SeriesType="SeriesType.Scatter"
+                                 XValue="@(p => p.Ride.StartDateLocal)" YValue="@(p => (decimal)Math.Round(p.NormalizedPower ?? 0))" />
+            </ApexChart>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Rides</h2>
+        <div class="table-wrap">
+            <table class="data">
+                <thead><tr><th>Date</th><th>Name</th><th class="r">Time</th><th class="r">Avg W</th><th class="r">NP</th><th class="r">IF</th><th class="r">TSS</th><th class="r">kJ</th></tr></thead>
+                <tbody>
+                    @foreach (var p in r.Rides.AsEnumerable().Reverse().Take(50))
+                    {
+                        <tr>
+                            <td class="num">@p.Ride.StartDateLocal.ToString("ddd d MMM yyyy")</td>
+                            <td><a href="@($"activities/{p.Ride.StravaId}")">@p.Ride.Name</a></td>
+                            <td class="r">@Units.FormatClock(p.Ride.MovingTimeS)</td>
+                            <td class="r">@p.Ride.AvgWatts?.ToString("0")</td>
+                            <td class="r">@(p.NormalizedPower?.ToString("0") ?? "–")</td>
+                            <td class="r">@(p.IntensityFactor?.ToString("0.00") ?? "–")</td>
+                            <td class="r">@(p.Tss?.ToString("0") ?? "–")</td>
+                            <td class="r">@p.Kilojoules.ToString("N0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No power data</h2><p>No rides with power match the filter.</p></div> }
+
+@code {
+    private PowerResult? _result;
+    private ApexChartOptions<PowerCurvePoint> _curve = UiTheme.ChartOptions<PowerCurvePoint>(false);
+    private ApexChartOptions<FtpPoint> _ftp = UiTheme.ChartOptions<FtpPoint>(false);
+    private ApexChartOptions<PeriodValue> _kj = UiTheme.ChartOptions<PeriodValue>(false);
+    private ApexChartOptions<PowerRide> _rides = UiTheme.ChartOptions<PowerRide>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct) => _result = await Report.RunAsync(Filter, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _curve = UiTheme.ChartOptions<PowerCurvePoint>(Dark, "W");
+        _curve.Markers = new Markers { Size = 4 };
+        _ftp = UiTheme.ChartOptions<FtpPoint>(Dark, "W");
+        _ftp.Colors = [UiTheme.Palette[3]];
+        _ftp.Markers = new Markers { Size = 4 };
+        _kj = UiTheme.ChartOptions<PeriodValue>(Dark, "kJ");
+        _kj.Colors = [UiTheme.Palette[4]];
+        _rides = UiTheme.ChartOptions<PowerRide>(Dark, "W");
+        _rides.Colors = [UiTheme.Palette[1], UiTheme.Palette[0]];
+        _rides.Markers = new Markers { Size = 4 };
+    }
+
+    public static string DurationLabel(int seconds) => seconds < 60 ? $"{seconds}s" : seconds < 3600 ? $"{seconds / 60}m" : $"{seconds / 3600}h";
+}

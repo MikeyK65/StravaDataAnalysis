@@ -1,0 +1,26 @@
+@page "/reports/{Id}"
+@inject ReportCatalogue Catalogue
+
+@if (_entry is { } e)
+{
+    <PageTitle>@e.Report.Title · Strava Reports</PageTitle>
+    <div class="page-head">
+        <div>
+            <h1>@e.Report.Title</h1>
+            <p class="muted">@e.Report.Description</p>
+        </div>
+    </div>
+    <DynamicComponent @key="e.Report.Id" Type="e.ViewType" />
+}
+else
+{
+    <PageTitle>Not found · Strava Reports</PageTitle>
+    <div class="card empty"><h2>Report not found</h2><p>No report is registered with id “@Id”.</p></div>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = "";
+    private ReportEntry? _entry;
+
+    protected override void OnParametersSet() => _entry = Catalogue.Find(Id);
+}

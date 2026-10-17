@@ -1,0 +1,93 @@
+@inherits ReportViewBase
+@inject RunningReport Report
+
+<FilterBar ShowSport="false" />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Runs.Count: > 0 } r)
+{
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Runs</div><div class="value">@r.Total.Count</div><div class="sub">@Units.FormatDuration(r.Total.MovingTimeS)</div></div>
+        <div class="card stat"><div class="label">Distance</div><div class="value">@Dist(r.Total.DistanceM, 0)</div><div class="sub">@Elev(r.Total.ElevationGainM) climbed</div></div>
+        <div class="card stat"><div class="label">Average pace</div><div class="value">@Pace(r.Total.DistanceM, r.Total.MovingTimeS)</div><div class="sub">moving time</div></div>
+        <div class="card stat"><div class="label">Longest run</div><div class="value">@Dist(r.Runs.Max(x => x.DistanceM), 1)</div><div class="sub">@r.Runs.MaxBy(x => x.DistanceM)!.StartDateLocal.ToString("d MMM yyyy")</div></div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Weekly mileage</h2>
+            <ApexChart @key="@($"m{Version}")" TItem="RunWeek" Options="_mileage" Height="280">
+                <ApexPointSeries TItem="RunWeek" Items="r.Weeks" Name="@($"Distance ({DU})")" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => DistVal(w.DistanceM))" />
+            </ApexChart>
+        </div>
+        <div class="card">
+            <h2>Average pace trend</h2>
+            <p class="muted small">Weekly average, minutes @Units.PaceUnit(U). Lower is faster.</p>
+            <ApexChart @key="@($"p{Version}")" TItem="RunWeek" Options="_pace" Height="260">
+                <ApexPointSeries TItem="RunWeek" Items="r.Weeks.Where(w => w.DistanceM > 0)" Name="Pace" SeriesType="SeriesType.Line"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => PaceMinutes(w.DistanceM, w.MovingTimeS))" />
+            </ApexChart>
+        </div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Long-run progression</h2>
+            <p class="muted small">Longest run in each week.</p>
+            <ApexChart @key="@($"l{Version}")" TItem="RunWeek" Options="_long" Height="260">
+                <ApexPointSeries TItem="RunWeek" Items="r.Weeks" Name="@($"Longest ({DU})")" SeriesType="SeriesType.Line"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => DistVal(w.LongestRunM))" />
+            </ApexChart>
+        </div>
+        <div class="card">
+            <h2>Pace by distance band</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Band</th><th class="r">Runs</th><th class="r">Distance</th><th class="r">Avg pace</th><th class="r">Fastest</th></tr></thead>
+                    <tbody>
+                        @foreach (var b in r.Bands)
+                        {
+                            <tr>
+                                <td>@b.Label</td>
+                                <td class="r">@b.Count</td>
+                                <td class="r">@(b.Count == 0 ? "–" : Dist(b.DistanceM, 0))</td>
+                                <td class="r">@(b.Count == 0 ? "–" : Pace(b.DistanceM, b.MovingTimeS))</td>
+                                <td class="r">@(b.FastestPaceSecPerKm is { } f ? Units.FormatPace(U == UnitSystem.Imperial ? f * Units.MetresPerMile / 1000 : f, U) : "–")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Runs</h2>
+        <ActivityTable Rows="r.Runs.AsEnumerable().Reverse().Take(50).ToList()" UnitsSystem="U" />
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No runs</h2><p>No running activities match the filter.</p></div> }
+
+@code {
+    private RunningResult? _result;
+    private ApexChartOptions<RunWeek> _mileage = UiTheme.ChartOptions<RunWeek>(false);
+    private ApexChartOptions<RunWeek> _pace = UiTheme.ChartOptions<RunWeek>(false);
+    private ApexChartOptions<RunWeek> _long = UiTheme.ChartOptions<RunWeek>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct) => _result = await Report.RunAsync(Filter, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _mileage = UiTheme.ChartOptions<RunWeek>(Dark, DU);
+        _pace = UiTheme.ChartOptions<RunWeek>(Dark, $"min {Units.PaceUnit(U)}");
+        _pace.Yaxis![0].Reversed = true;
+        _pace.Colors = [UiTheme.Palette[1]];
+        _long = UiTheme.ChartOptions<RunWeek>(Dark, DU);
+        _long.Colors = [UiTheme.Palette[2]];
+    }
+
+    private decimal? PaceMinutes(double distanceM, int seconds) =>
+        Calc.PaceSecondsPerUnit(distanceM, seconds, U) is { } s ? (decimal)Math.Round(s / 60, 2) : null;
+}

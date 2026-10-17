@@ -1,0 +1,91 @@
+@inherits ReportViewBase
+@inject RunningEfficiencyReport Report
+
+<FilterBar ShowSport="false" />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Runs.Count: > 0 } r)
+{
+    var withCadence = r.Runs.Where(x => x.CadenceSpm is not null).ToList();
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Runs with HR</div><div class="value">@r.Runs.Count</div><div class="sub">@r.RunsWithoutHr without heart rate</div></div>
+        <div class="card stat"><div class="label">Efficiency factor</div><div class="value">@((r.Runs.Sum(x => x.EfficiencyFactor * x.Run.MovingTimeS) / r.Runs.Sum(x => (double)x.Run.MovingTimeS)).ToString("0.00"))</div><div class="sub">metres per minute per bpm</div></div>
+        <div class="card stat"><div class="label">Average HR</div><div class="value">@((r.Runs.Sum(x => x.AvgHr * x.Run.MovingTimeS) / r.Runs.Sum(x => (double)x.Run.MovingTimeS)).ToString("0")) bpm</div><div class="sub">time-weighted</div></div>
+        <div class="card stat"><div class="label">Cadence</div><div class="value">@(withCadence.Count > 0 ? $"{withCadence.Average(x => x.CadenceSpm!.Value):0} spm" : "–")</div><div class="sub">steps per minute</div></div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Pace versus heart rate</h2>
+            <p class="muted small">Each run's average pace (min @Units.PaceUnit(U)) against average HR. Faster at the same HR means fitter.</p>
+            <ApexChart @key="@($"s{Version}")" TItem="EfficiencyRun" Options="_scatter" Height="300" XAxisType="XAxisType.Numeric">
+                <ApexPointSeries TItem="EfficiencyRun" Items="r.Runs" Name="Runs" SeriesType="SeriesType.Scatter"
+                                 XValue="@(x => (decimal)Math.Round(x.AvgHr))" YValue="@(x => PaceMinutes(x.PaceSecPerKm))" />
+            </ApexChart>
+        </div>
+        <div class="card">
+            <h2>Efficiency factor trend</h2>
+            <p class="muted small">Weekly, time-weighted. Higher is better.</p>
+            <ApexChart @key="@($"e{Version}")" TItem="EfficiencyWeek" Options="_ef" Height="280">
+                <ApexPointSeries TItem="EfficiencyWeek" Items="r.Weeks.Where(w => w.EfficiencyFactor is not null)" Name="Efficiency factor" SeriesType="SeriesType.Line"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => (decimal?)Math.Round(w.EfficiencyFactor!.Value, 3))" />
+            </ApexChart>
+        </div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Cadence trend</h2>
+            @if (withCadence.Count > 0)
+            {
+                <ApexChart @key="@($"c{Version}")" TItem="EfficiencyWeek" Options="_cadence" Height="260">
+                    <ApexPointSeries TItem="EfficiencyWeek" Items="r.Weeks.Where(w => w.CadenceSpm is not null)" Name="Cadence (spm)" SeriesType="SeriesType.Line"
+                                     XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => (decimal?)Math.Round(w.CadenceSpm!.Value, 0))" />
+                </ApexChart>
+            }
+            else { <p class="muted">No cadence recorded on these runs.</p> }
+        </div>
+        <div class="card">
+            <h2>Heart-rate zones on runs</h2>
+            @if (r.Zones is { } zones && r.ZoneSeconds.Sum() > 0)
+            {
+                var total = r.ZoneSeconds.Sum();
+                <p class="muted small">Zones: @zones.Source.</p>
+                <dl class="stat-rows">
+                    @for (var z = 0; z < 5; z++)
+                    {
+                        <dt><span class="zone-dot" style="background:@HrZonesView.ZoneColors[z]"></span>@HrZoneSet.Names[z] (@zones.Range(z))</dt>
+                        <dd>@Units.FormatDuration((int)r.ZoneSeconds[z]) · @((r.ZoneSeconds[z] / total).ToString("P0"))</dd>
+                    }
+                </dl>
+            }
+            else { <p class="muted">Set max HR or zones in <a href="settings">Settings</a>.</p> }
+        </div>
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No runs with heart rate</h2><p>No running activities with heart rate match the filter.</p></div> }
+
+@code {
+    private RunningEfficiencyResult? _result;
+    private ApexChartOptions<EfficiencyRun> _scatter = UiTheme.ChartOptions<EfficiencyRun>(false);
+    private ApexChartOptions<EfficiencyWeek> _ef = UiTheme.ChartOptions<EfficiencyWeek>(false);
+    private ApexChartOptions<EfficiencyWeek> _cadence = UiTheme.ChartOptions<EfficiencyWeek>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct) => _result = await Report.RunAsync(Filter, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _scatter = UiTheme.ChartOptions<EfficiencyRun>(Dark, $"min {Units.PaceUnit(U)}");
+        _scatter.Yaxis![0].Reversed = true;
+        _scatter.Xaxis = new XAxis { Title = new AxisTitle { Text = "average HR (bpm)" }, TickAmount = 8 };
+        _scatter.Markers = new Markers { Size = 4 };
+        _ef = UiTheme.ChartOptions<EfficiencyWeek>(Dark, "EF");
+        _ef.Colors = [UiTheme.Palette[2]];
+        _cadence = UiTheme.ChartOptions<EfficiencyWeek>(Dark, "spm");
+        _cadence.Colors = [UiTheme.Palette[3]];
+    }
+
+    private decimal? PaceMinutes(double secPerKm) =>
+        (decimal)Math.Round((U == UnitSystem.Imperial ? secPerKm * Units.MetresPerMile / 1000 : secPerKm) / 60, 2);
+}

@@ -1,0 +1,80 @@
+@inherits ReportViewBase
+@inject RoutesReport Report
+
+<FilterBar />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Selected: { } region } r)
+{
+    <div class="card">
+        <div class="card-head">
+            <h2>@RoutesReport.Label(region.Center)</h2>
+            @if (r.Regions.Count > 1)
+            {
+                <select aria-label="Area" value="@region.Key" @onchange="OnRegion">
+                    @foreach (var g in r.Regions)
+                    {
+                        <option value="@g.Key">@RoutesReport.Label(g.Center) · @g.Count</option>
+                    }
+                </select>
+            }
+        </div>
+        <p class="muted small">
+            @region.Count activities, @Dist(region.DistanceM, 0) in this area.
+            @if (r.Truncated > 0) { <span>Showing the newest @RoutesReport.MaxTracks; narrow the date range to see the rest. </span> }
+            @if (r.WithoutRoute > 0) { <span>@r.WithoutRoute activities have no route (indoor or manual). </span> }
+            Click a route to open it.
+        </p>
+        <RouteMap Lines="_lines" Height="560" ShowTiles="Settings.MapTiles" TileUrl="@Settings.MapTileUrl" Label="@($"Routes around {RoutesReport.Label(region.Center)}")" />
+        @if (!Settings.MapTiles)
+        {
+            <p class="muted small" style="margin-top:.5rem">Map tiles are off, so no location data leaves this device. Turn them on in <a href="settings">Settings</a>.</p>
+        }
+    </div>
+
+    @if (r.Regions.Count > 1)
+    {
+        <div class="card">
+            <h2>Areas</h2>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Area (first start)</th><th class="r">Activities</th><th class="r">Distance</th></tr></thead>
+                    <tbody>
+                        @foreach (var g in r.Regions.Take(20))
+                        {
+                            <tr>
+                                <td><a href="reports/routes" @onclick="() => SelectAsync(g.Key)" @onclick:preventDefault>@RoutesReport.Label(g.Center)</a></td>
+                                <td class="r">@g.Count</td>
+                                <td class="r">@Dist(g.DistanceM, 0)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No routes</h2><p>No activities with a GPS route match the filter.</p></div> }
+
+@code {
+    private RoutesResult? _result;
+    private string? _region;
+    private List<RouteMap.RouteLine> _lines = [];
+
+    protected override async Task LoadAsync(CancellationToken ct)
+    {
+        _result = await Report.RunAsync(Filter, _region, ct);
+        _lines = _result.Tracks
+            .Select(t => new RouteMap.RouteLine(t.Points, $"activities/{t.StravaId}", $"{t.Name} · {t.StartDateLocal:d MMM yyyy} · {Dist(t.DistanceM)}"))
+            .ToList();
+    }
+
+    private async Task OnRegion(ChangeEventArgs e) => await SelectAsync(e.Value?.ToString());
+
+    private async Task SelectAsync(string? key)
+    {
+        _region = key;
+        await ReloadAsync();
+    }
+}

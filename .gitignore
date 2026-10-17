@@ -1,0 +1,38 @@
+bin/
+obj/
+.vs/
+*.user
+# Local data: database, encrypted secrets, Data Protection keys, setup code
+App_Data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets and per-machine data, wherever they end up
+secrets.json
+setup-code.txt
+keys/
+*.pfx
+*.snk
+.env
+appsettings.*.local.json
+
+# Backups and exports made by the app
+*-strava-reports-backup-*.zip
+strava-*.csv
+
+# Build and test output
+[Bb]in/
+[Oo]bj/
+TestResults/
+publish/
+*.binlog
+
+# IDE and OS
+.vscode/
+.idea/
+*.suo
+*.DotSettings.user
+.DS_Store
+Thumbs.db
+node_modules/

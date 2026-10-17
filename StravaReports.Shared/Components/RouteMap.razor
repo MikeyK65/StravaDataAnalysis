@@ -1,0 +1,73 @@
+@* Routes drawn as SVG in Web Mercator pixel space. Optional raster tiles sit underneath in the same
+   space, so no mapping library or network is needed unless tiles are switched on in Settings. *@
+@inject NavigationManager Nav
+
+@if (_view is { } v)
+{
+    <div class="route-map" style="aspect-ratio:@Width / @Height">
+        <svg viewBox="0 0 @Width @Height" preserveAspectRatio="xMidYMid meet" role="img" aria-label="@Label">
+            <rect class="route-bg" x="0" y="0" width="@Width" height="@Height" />
+            @if (ShowTiles)
+            {
+                @foreach (var (tx, ty) in MapLayout.Tiles(v))
+                {
+                    <image href="@MapLayout.TileUrl(TileUrl, v.Zoom, tx, ty)" x="@F(tx * MapView.TileSize - v.X0)" y="@F(ty * MapView.TileSize - v.Y0)"
+                           width="@(MapView.TileSize + 0.5)" height="@(MapView.TileSize + 0.5)" />
+                }
+            }
+            @foreach (var (line, path) in _paths)
+            {
+                <path d="@path" class="@(Lines.Count == 1 ? "route single" : "route")" style="@(line.Href is null ? null : "cursor:pointer")"
+                      @onclick="() => Open(line)"><title>@line.Title</title></path>
+            }
+            @if (Lines.Count == 1 && Lines[0].Points is { Count: > 1 } pts)
+            {
+                var (sx, sy) = MapLayout.ToView(pts[0], v);
+                var (ex, ey) = MapLayout.ToView(pts[^1], v);
+                <circle cx="@F(ex)" cy="@F(ey)" r="6" class="route-end" />
+                <circle cx="@F(sx)" cy="@F(sy)" r="6" class="route-start" />
+            }
+        </svg>
+        @if (ShowTiles)
+        {
+            <div class="route-attrib">
+                @if (TileUrl.Contains("openstreetmap", StringComparison.OrdinalIgnoreCase))
+                {
+                    <span>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</span>
+                }
+                else { <span>Tiles: @(Uri.TryCreate(TileUrl.Replace("{", "").Replace("}", ""), UriKind.Absolute, out var u) ? u.Host : "custom")</span> }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    public record RouteLine(IReadOnlyList<LatLng> Points, string? Href = null, string? Title = null);
+
+    [Parameter, EditorRequired] public IReadOnlyList<RouteLine> Lines { get; set; } = [];
+    [Parameter] public int Width { get; set; } = 800;
+    [Parameter] public int Height { get; set; } = 480;
+    [Parameter] public bool ShowTiles { get; set; }
+    [Parameter] public string TileUrl { get; set; } = StravaDefaults.MapTileUrl;
+    [Parameter] public string Label { get; set; } = "Route map";
+
+    private MapView? _view;
+    private List<(RouteLine Line, string Path)> _paths = [];
+
+    protected override void OnParametersSet()
+    {
+        var all = Lines.SelectMany(l => l.Points).ToList();
+        if (all.Count < 2) { _view = null; _paths = []; return; }
+        _view = MapLayout.Fit(all, Width, Height);
+        // A single route gets full detail; an overlay of hundreds is thinned per line.
+        var perLine = Lines.Count == 1 ? 4000 : 400;
+        _paths = Lines.Where(l => l.Points.Count > 1).Select(l => (l, MapLayout.ToPath(l.Points, _view, perLine))).ToList();
+    }
+
+    private void Open(RouteLine line)
+    {
+        if (line.Href is not null) Nav.NavigateTo(line.Href);
+    }
+
+    private static string F(double v) => v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+}

@@ -1,0 +1,45 @@
+@page "/activities"
+@inherits ReportViewBase
+@inject ActivityQueries Queries
+
+<PageTitle>Activities · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Activities</h1>
+        <p class="muted">@_count.ToString("N0") activities match the filter.</p>
+    </div>
+</div>
+
+<FilterBar />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_rows.Count > 0)
+{
+    <div class="card">
+        <ActivityTable Rows="_rows" UnitsSystem="U" />
+        <div class="btn-row" style="justify-content:space-between; margin-top:.75rem">
+            <button class="btn" disabled="@(_page == 0)" @onclick="() => Go(-1)">← Newer</button>
+            <span class="muted small" style="align-self:center">Page @(_page + 1) of @Math.Max(1, (_count + PageSize - 1) / PageSize)</span>
+            <button class="btn" disabled="@((_page + 1) * PageSize >= _count)" @onclick="() => Go(1)">Older →</button>
+        </div>
+    </div>
+}
+else if (!Loading) { <div class="card empty"><h2>No activities</h2><p>Nothing matches the filter yet. Run a sync from the Sync page.</p></div> }
+
+@code {
+    private const int PageSize = 50;
+    private int _page;
+    private int _count;
+    private List<ActivityRow> _rows = [];
+    private ReportFilter? _lastFilter;
+
+    protected override async Task LoadAsync(CancellationToken ct)
+    {
+        if (_lastFilter != Filter) { _page = 0; _lastFilter = Filter; }
+        _count = await Queries.CountAsync(Filter, ct);
+        _rows = await Queries.ListAsync(Filter, _page * PageSize, PageSize, ct);
+    }
+
+    private async Task Go(int delta) { _page = Math.Max(0, _page + delta); await ReloadAsync(); }
+}

@@ -1,0 +1,15 @@
+<div class="card stat">
+    <div class="label">@Label</div>
+    <div class="value">@Units.FormatDistance(Totals.DistanceM, UnitsSystem)</div>
+    <dl class="stat-rows">
+        <dt>Activities</dt><dd>@Totals.Count</dd>
+        <dt>Time</dt><dd>@Units.FormatDuration(Totals.MovingTimeS)</dd>
+        <dt>Elevation</dt><dd>@Units.FormatElevation(Totals.ElevationGainM, UnitsSystem)</dd>
+    </dl>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public Totals Totals { get; set; } = Totals.Empty;
+    [Parameter] public UnitSystem UnitsSystem { get; set; }
+}

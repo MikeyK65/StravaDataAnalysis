@@ -1,0 +1,17 @@
+<div style="margin:.5rem 0">
+    <div class="small" style="display:flex;justify-content:space-between">
+        <span>@Label</span>
+        <span class="num muted">@(Limit is null ? "unknown" : $"{Limit - Usage} of {Limit} left")</span>
+    </div>
+    <div class="meter @(Fraction < .5 ? "ok" : Fraction < .85 ? "" : "warn")">
+        <span style="width:@((Fraction * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture))%"></span>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public int? Limit { get; set; }
+    [Parameter] public int? Usage { get; set; }
+
+    private double Fraction => Limit is > 0 ? Math.Clamp((Usage ?? 0) / (double)Limit.Value, 0, 1) : 0;
+}

@@ -1,0 +1,29 @@
+@page "/sync"
+@inject IHostInfo Host
+
+<PageTitle>Sync · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Sync</h1>
+        <p class="muted">
+            @(Host.HasScheduledSync
+                ? "A background service syncs on the interval set in Settings. You can also sync now."
+                : "This app syncs when it launches and when you press Sync now.")
+        </p>
+    </div>
+</div>
+
+<SyncStatusPanel />
+
+<div class="card">
+    <h2>How sync works</h2>
+    <ol class="small" style="padding-left:1.2rem; margin:0">
+        <li>The access token is refreshed if it expires within 10 minutes.</li>
+        <li>New activities since the newest one stored are fetched (incremental sync).</li>
+        <li>On the first run, history is paged backwards (backfill), saving a cursor after every page so it can resume.</li>
+        <li>Activity detail (laps, best efforts, gear) and, if enabled, streams are fetched from a queue, newest first.</li>
+        <li>Once a week, the last 30 days are reconciled to catch activities deleted or edited on Strava.</li>
+    </ol>
+    <p class="muted small" style="margin-bottom:0">When the 15-minute or daily rate limit is nearly used, sync pauses and resumes in the next window. Summary data lands first so reports work straight away.</p>
+</div>

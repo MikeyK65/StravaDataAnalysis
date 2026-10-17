@@ -1,0 +1,68 @@
+@inherits ReportViewBase
+@inject CyclingReport Report
+
+<FilterBar ShowSport="false" />
+
+@if (Error is not null) { <div class="alert danger">@Error</div> }
+else if (_result is { Rides.Count: > 0 } r)
+{
+    <div class="grid grid-4">
+        <div class="card stat"><div class="label">Rides</div><div class="value">@r.Total.Count</div><div class="sub">@Units.FormatDuration(r.Total.MovingTimeS)</div></div>
+        <div class="card stat"><div class="label">Distance</div><div class="value">@Dist(r.Total.DistanceM, 0)</div><div class="sub">longest @Dist(r.Rides.Max(x => x.DistanceM))</div></div>
+        <div class="card stat"><div class="label">Average speed</div><div class="value">@Speed(r.Total.MovingTimeS > 0 ? r.Total.DistanceM / r.Total.MovingTimeS : 0)</div><div class="sub">moving time</div></div>
+        <div class="card stat"><div class="label">Climbing</div><div class="value">@Elev(r.Total.ElevationGainM)</div>
+            <div class="sub">@(r.AvgPowerW is { } p ? $"avg power {p:0} W" : "no power data")@(r.TotalKj is { } kj ? $" · {kj:N0} kJ" : "")</div></div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>Distance per week</h2>
+            <ApexChart @key="@($"d{Version}")" TItem="RideWeek" Options="_distance" Height="280">
+                <ApexPointSeries TItem="RideWeek" Items="r.Weeks" Name="@($"Distance ({DU})")" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => DistVal(w.DistanceM))" />
+            </ApexChart>
+        </div>
+        <div class="card">
+            <h2>Climbing per week</h2>
+            <ApexChart @key="@($"c{Version}")" TItem="RideWeek" Options="_climb" Height="280">
+                <ApexPointSeries TItem="RideWeek" Items="r.Weeks" Name="@($"Elevation ({Units.ElevationUnit(U)})")" SeriesType="SeriesType.Bar"
+                                 XValue="@(w => w.Week.ToString("d MMM yy"))" YValue="@(w => ElevVal(w.ElevationGainM))" />
+            </ApexChart>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Average speed per ride</h2>
+        <p class="muted small">Each ride's moving average speed (@Units.SpeedUnit(U)). Trainer rides are included unless filtered out.</p>
+        <ApexChart @key="@($"s{Version}")" TItem="ActivityRow" Options="_speed" Height="280" XAxisType="XAxisType.Datetime">
+            <ApexPointSeries TItem="ActivityRow" Items="r.Rides.Where(x => x.DistanceM > 0)" Name="Avg speed" SeriesType="SeriesType.Scatter"
+                             XValue="@(x => x.StartDateLocal)" YValue="@(x => (decimal)Math.Round(Units.SpeedValue(x.AvgSpeed, U), 1))" />
+        </ApexChart>
+    </div>
+
+    <div class="card">
+        <h2>Rides</h2>
+        <ActivityTable Rows="r.Rides.AsEnumerable().Reverse().Take(50).ToList()" UnitsSystem="U" />
+    </div>
+}
+else if (Loading) { <div class="loading">Loading…</div> }
+else { <div class="card empty"><h2>No rides</h2><p>No cycling activities match the filter.</p></div> }
+
+@code {
+    private CyclingResult? _result;
+    private ApexChartOptions<RideWeek> _distance = UiTheme.ChartOptions<RideWeek>(false);
+    private ApexChartOptions<RideWeek> _climb = UiTheme.ChartOptions<RideWeek>(false);
+    private ApexChartOptions<ActivityRow> _speed = UiTheme.ChartOptions<ActivityRow>(false);
+
+    protected override async Task LoadAsync(CancellationToken ct) => _result = await Report.RunAsync(Filter, Settings, ct);
+
+    protected override void BuildCharts()
+    {
+        _distance = UiTheme.ChartOptions<RideWeek>(Dark, DU);
+        _climb = UiTheme.ChartOptions<RideWeek>(Dark, Units.ElevationUnit(U));
+        _climb.Colors = [UiTheme.Palette[2]];
+        _speed = UiTheme.ChartOptions<ActivityRow>(Dark, Units.SpeedUnit(U));
+        _speed.Colors = [UiTheme.Palette[1]];
+        _speed.Markers = new Markers { Size = 4 };
+    }
+}

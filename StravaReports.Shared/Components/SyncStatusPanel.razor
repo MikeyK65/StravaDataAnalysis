@@ -1,0 +1,121 @@
+@implements IDisposable
+@inject SyncStatusService StatusService
+@inject SyncEngine Sync
+
+@if (_status is { } s)
+{
+    <div class="card">
+        <div class="card-head">
+            <h2>Sync status</h2>
+            @if (s.IsRunning)
+            {
+                <span class="badge accent">Running: @s.Stage</span>
+            }
+            else
+            {
+                <span class="badge @BadgeClass(s.LastStatus)">@(s.LastStatus ?? "Never run")</span>
+            }
+        </div>
+
+        @if (s.IsRunning && !string.IsNullOrEmpty(s.StageMessage))
+        {
+            <p class="muted small">@s.StageMessage</p>
+        }
+
+        <dl class="stat-rows">
+            <dt>Last run</dt><dd>@Local(s.LastRunFinishedUtc ?? s.LastRunStartedUtc)</dd>
+            <dt>Activities stored</dt><dd>@s.ActivityCount.ToString("N0")</dd>
+            <dt>Backfill</dt>
+            <dd>@(s.BackfillComplete ? "Complete" : s.BackfillReachedUtc is { } b ? $"In progress (back to {b.ToLocalTime():d MMM yyyy})" : "Not started")</dd>
+            <dt>Detail queue</dt><dd>@s.PendingJobs.ToString("N0") pending@(s.FailedJobs > 0 ? $", {s.FailedJobs} failed" : "")</dd>
+            @if (s.ResumeAfterUtc is { } r && r > DateTime.UtcNow)
+            {
+                <dt>Paused until</dt><dd>@Local(r)</dd>
+            }
+        </dl>
+
+        @if (!Compact)
+        {
+            <h3 style="margin-top:1rem">Rate-limit budget</h3>
+            <RateMeter Label="15-minute window" Limit="s.RateLimits.ShortLimit" Usage="s.RateLimits.ShortUsage" />
+            <RateMeter Label="Daily" Limit="s.RateLimits.DailyLimit" Usage="s.RateLimits.DailyUsage" />
+            @if (s.RateLimits.ObservedUtc is null)
+            {
+                <p class="muted small">No API calls observed yet; limits are read from Strava's response headers.</p>
+            }
+        }
+
+        @if (!string.IsNullOrEmpty(s.LastError))
+        {
+            <div class="alert danger small" style="margin-top:.75rem">@s.LastError</div>
+        }
+
+        @if (ShowActions)
+        {
+            <div class="btn-row" style="margin-top:.9rem">
+                <button class="btn btn-primary" disabled="@s.IsRunning" @onclick="SyncNow">Sync now</button>
+                @if (s.IsRunning)
+                {
+                    <button class="btn" @onclick="Sync.Cancel">Stop</button>
+                }
+                @if (s.FailedJobs > 0)
+                {
+                    <button class="btn" @onclick="RetryFailed">Retry failed jobs</button>
+                }
+                @if (!Compact)
+                {
+                    <button class="btn" @onclick="Reconcile" title="Check the last 30 days for activities deleted or edited on Strava">Reconcile on next run</button>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public bool Compact { get; set; }
+    [Parameter] public bool ShowActions { get; set; } = true;
+
+    private SyncStatus? _status;
+    private Timer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Sync.ProgressChanged += OnProgress;
+        await RefreshAsync();
+        // Poll while running so counts move during a long backfill.
+        _timer = new Timer(_ => { if (Sync.IsRunning) _ = InvokeAsync(RefreshAndRender); }, null, 2000, 2000);
+    }
+
+    private async Task RefreshAsync() => _status = await StatusService.GetAsync();
+
+    private async Task RefreshAndRender() { await RefreshAsync(); StateHasChanged(); }
+
+    private void OnProgress(SyncProgress p) => _ = InvokeAsync(RefreshAndRender);
+
+    private async Task SyncNow()
+    {
+        Sync.StartInBackground(SyncTrigger.Manual);
+        await Task.Delay(150);
+        await RefreshAsync();
+    }
+
+    private async Task RetryFailed() { await StatusService.RetryFailedJobsAsync(); await RefreshAsync(); }
+
+    private async Task Reconcile() { await StatusService.RequestReconcileAsync(); await RefreshAsync(); }
+
+    private static string Local(DateTime? utc) => utc is { } d ? d.ToLocalTime().ToString("d MMM yyyy HH:mm") : "–";
+
+    private static string BadgeClass(string? status) => status switch
+    {
+        "Completed" => "ok",
+        "Paused" => "warn",
+        "Failed" or "NotConnected" => "danger",
+        _ => "",
+    };
+
+    public void Dispose()
+    {
+        Sync.ProgressChanged -= OnProgress;
+        _timer?.Dispose();
+    }
+}

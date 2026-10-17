@@ -1,0 +1,62 @@
+@page "/logs"
+@inject AppLog Log
+
+<PageTitle>Logs · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Logs</h1>
+        <p class="muted">Sync runs and API errors. Secrets and tokens are never logged.</p>
+    </div>
+    <div class="btn-row">
+        <div class="seg">
+            @foreach (var l in new[] { "All", "Warning", "Error" })
+            {
+                <button class="@(_level == l ? "on" : "")" @onclick="() => _level = l">@l</button>
+            }
+        </div>
+        <button class="btn" @onclick="LoadAsync">Refresh</button>
+    </div>
+</div>
+
+<div class="card">
+    @if (_entries.Count == 0)
+    {
+        <div class="empty">No log entries yet.</div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="data">
+                <thead><tr><th>Time</th><th>Level</th><th>Area</th><th>Message</th></tr></thead>
+                <tbody>
+                    @foreach (var e in Filtered)
+                    {
+                        <tr>
+                            <td class="num">@e.TimestampUtc.ToLocalTime().ToString("d MMM HH:mm:ss")</td>
+                            <td><span class="badge @(e.Level == "Error" ? "danger" : e.Level == "Warning" ? "warn" : "")">@e.Level</span></td>
+                            <td>@e.Category</td>
+                            <td style="white-space:normal; min-width:260px">@e.Message</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<LogEntry> _entries = [];
+    private string _level = "All";
+
+    private IEnumerable<LogEntry> Filtered => _level switch
+    {
+        "Warning" => _entries.Where(e => e.Level is "Warning" or "Error"),
+        "Error" => _entries.Where(e => e.Level == "Error"),
+        _ => _entries,
+    };
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync() => _entries = await Log.RecentAsync();
+}

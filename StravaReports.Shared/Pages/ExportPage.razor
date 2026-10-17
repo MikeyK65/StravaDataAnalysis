@@ -1,0 +1,65 @@
+@page "/export"
+@inject CsvExportService Exporter
+@inject IFileSaver Saver
+@inject FilterState FilterState
+@inject AppSettingsService SettingsService
+
+<PageTitle>Export · Strava Reports</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Export to CSV</h1>
+        <p class="muted">Raw data and report tables, in storage units (metres, seconds, metres per second). Exports use the filter below.</p>
+    </div>
+</div>
+
+<FilterBar />
+
+@if (_message is not null) { <div class="alert @(_failed ? "danger" : "ok")">@_message</div> }
+
+<div class="card">
+    <div class="table-wrap">
+        <table class="data">
+            <thead><tr><th>Export</th><th>Contents</th><th>Filter</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var (kind, title, description, usesFilter) in CsvExportService.Catalogue)
+                {
+                    <tr>
+                        <td><strong>@title</strong></td>
+                        <td class="muted">@description</td>
+                        <td>@(usesFilter ? "yes" : "all")</td>
+                        <td class="r"><button class="btn" disabled="@(_busy is not null)" @onclick="() => ExportAsync(kind)">@(_busy == kind ? "Exporting…" : "Download")</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<p class="muted small">Exports stay on this device or browser. Nothing is uploaded anywhere.</p>
+
+@code {
+    private ExportKind? _busy;
+    private string? _message;
+    private bool _failed;
+
+    private async Task ExportAsync(ExportKind kind)
+    {
+        _busy = kind;
+        _message = null;
+        try
+        {
+            var settings = await SettingsService.GetAsync();
+            var file = await Exporter.ExportAsync(kind, FilterState.Get(settings), settings);
+            var where = await Saver.SaveAsync(file.FileName, ExportFile.ContentType, file.Content);
+            _message = $"{where} {file.Rows:N0} rows.";
+            _failed = false;
+        }
+        catch (Exception ex)
+        {
+            _message = $"Export failed: {ex.Message}";
+            _failed = true;
+        }
+        finally { _busy = null; }
+    }
+}
